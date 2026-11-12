@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Menu Importer</title>
+<link rel="stylesheet" href="/static/style.css">
+<main>
+  <header><h1>Menu Importer</h1><p>Turn your restaurant menu into structured items and portions.</p></header>
+  <section>
+    <h2>Upload a menu</h2>
+    <form id="upload">
+      <div class="fields">
+        <label>Restaurant<input name="restaurant_name" required maxlength="200" placeholder="Example Kitchen"></label>
+        <label>Branch<input name="branch_name" required maxlength="200" placeholder="Dhanmondi"></label>
+        <label>Currency<input name="currency" value="BDT" pattern="[A-Z]{3}" maxlength="3" required></label>
+      </div>
+      <label>Menu files<input type="file" name="files" multiple required accept=".csv,.pdf,.png,.jpg,.jpeg,.webp"></label>
+      <p class="help">CSV, PDF or photos · Up to 5 files, 10 MiB each</p>
+      <div class="actions"><button>Extract menu</button><a href="/sample.csv">Download sample CSV</a></div>
+    </form>
+  </section>
+  <p id="status" role="status"></p>
+  <section id="review" hidden>
+    <h2>Review the draft</h2>
+    <details id="issues" hidden><summary></summary><ul></ul></details>
+    <div id="items"></div>
+    <div class="actions"><button id="add" type="button" class="secondary">Add item</button></div>
+    <details><summary>Edit all fields as JSON</summary>
+      <p class="help">Use this for translations, cuisine, spice, sweetness, and other optional fields.</p>
+      <textarea id="draft" rows="12" aria-label="Menu JSON" spellcheck="false"></textarea>
+      <button id="apply" type="button" class="secondary">Apply JSON changes</button>
+    </details>
+    <div class="actions"><button id="publish" type="button">Publish menu</button><button id="download" type="button" class="secondary">Download draft JSON</button><a id="published" hidden>Open published JSON</a></div>
+    <p id="review-status" role="status"></p>
+  </section>
+</main>
+<script src="/static/app.js" defer></script>
+</html>
