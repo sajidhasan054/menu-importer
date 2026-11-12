@@ -1,7 +1,6 @@
 from contextlib import closing
-import csv
-import io
 import os
+from zipfile import BadZipFile
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -13,8 +12,10 @@ from PIL import Image
 from pypdf.errors import PyPdfError
 from pypdfium2 import PdfiumError
 
-from importer import read_menu
-from schema import Currency, Item, Menu, Source, Variant
+import ai_extract
+from export import menu_csv
+from importer import SUPPORTED, read_menu
+from schema import Currency, Menu, Source
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Menu Importer", version="1.0")
@@ -45,37 +46,54 @@ def schema():
     return Menu.model_json_schema()
 
 
+@app.get("/api/status")
+def status():
+    return {
+        "ai_enabled": ai_extract.enabled(),
+        "ai_model": ai_extract.MODEL if ai_extract.enabled() else None,
+        "formats": SUPPORTED,
+    }
+
+
+MAX_FILE_BYTES = 25 * 1024 * 1024
+
+
 @app.post("/api/import")
 def import_menu(
-    restaurant_name: str = Form(min_length=1, max_length=200),
-    branch_name: str = Form(min_length=1, max_length=200),
+    restaurant_name: str = Form("", max_length=200),
+    branch_name: str = Form("", max_length=200),
     currency: Currency = Form("BDT"),
     files: list[UploadFile] = File(),
 ):
-    if not 1 <= len(files) <= 5:
-        raise HTTPException(422, "Select between one and five menu files.")
-    items, issues = [], []
+    if not 1 <= len(files) <= 10:
+        raise HTTPException(422, "Select between one and ten menu files.")
+    items, issues, detected_names, methods = [], [], [], set()
     for file in files:
         name = Path(file.filename or "untitled").name
-        data = file.file.read(10 * 1024 * 1024 + 1)
-        if len(data) > 10 * 1024 * 1024:
-            issues.append(Source(locator=name, raw_text="File exceeds 10 MiB."))
+        data = file.file.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES:
+            issues.append(Source(locator=name, raw_text="File exceeds 25 MiB."))
             continue
         try:
-            extracted, unmatched = read_menu(data, name, currency)
-        except (ValueError, OSError, PyPdfError, PdfiumError, Image.DecompressionBombError) as error:
-            issues.append(Source(locator=name, raw_text=str(error)))
+            extracted, unmatched, info = read_menu(data, name, currency)
+        except (ValueError, OSError, KeyError, BadZipFile, PyPdfError, PdfiumError, Image.DecompressionBombError) as error:
+            issues.append(Source(locator=name, raw_text=str(error) or "The file could not be read."))
             continue
+        methods.add(info["method"])
+        if info.get("restaurant_name"):
+            detected_names.append(info["restaurant_name"])
         for source in [*unmatched, *(source for item in extracted for source in item.sources)]:
             if not source.locator.startswith(name):
                 source.locator = f"{name} · {source.locator}"
         items.extend(extracted)
         issues.extend(unmatched)
-    try:
-        draft = Menu(restaurant_name=restaurant_name, branch_name=branch_name, default_currency=currency, items=items)
-    except ValueError as error:
-        raise HTTPException(422, "Enter a restaurant name and a branch name.") from error
-    return {"draft": draft, "review_issues": issues}
+    draft = Menu(
+        restaurant_name=restaurant_name.strip() or (detected_names[0] if detected_names else "Restaurant"),
+        branch_name=branch_name.strip() or "Main",
+        default_currency=currency,
+        items=items,
+    )
+    return {"draft": draft, "review_issues": issues, "methods": sorted(methods)}
 
 
 @app.post("/api/validate")
@@ -83,34 +101,12 @@ def validate(menu: Menu):
     return menu
 
 
-def spreadsheet_cell(value):
-    if isinstance(value, list):
-        value = "|".join(value)
-    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
-        return "'" + value
-    return value
-
-
 @app.post("/api/export/csv", response_class=Response)
-def export_csv(menu: Menu):
+def export_csv(menu: Menu, all_columns: bool = False):
     if not menu.items:
         raise HTTPException(422, "Add at least one menu item before exporting.")
-    item_columns = [field for field in Item.model_fields if field not in {"variants", "sources"}]
-    output = io.StringIO(newline="")
-    writer = csv.writer(output)
-    writer.writerow(["restaurant_name", "branch_name", *item_columns, *Variant.model_fields])
-    for item in menu.items:
-        item_values = [spreadsheet_cell(getattr(item, field)) for field in item_columns]
-        for variant in item.variants:
-            variant_values = variant.model_dump()
-            if variant.price_amount is not None:
-                variant_values["price_amount"] = format(variant.price_amount, "f")
-            writer.writerow([
-                spreadsheet_cell(menu.restaurant_name), spreadsheet_cell(menu.branch_name),
-                *item_values, *(spreadsheet_cell(value) for value in variant_values.values()),
-            ])
     return Response(
-        output.getvalue().encode("utf-8-sig"), media_type="text/csv",
+        menu_csv(menu, include_empty=all_columns), media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="extracted-menu.csv"'},
     )
 

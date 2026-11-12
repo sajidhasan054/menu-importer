@@ -10,12 +10,13 @@
     <h2>Upload a menu</h2>
     <form id="upload">
       <div class="fields">
-        <label>Restaurant<input name="restaurant_name" required maxlength="200" placeholder="Example Kitchen"></label>
-        <label>Branch<input name="branch_name" required maxlength="200" placeholder="Dhanmondi"></label>
-        <label>Currency<input name="currency" value="BDT" pattern="[A-Z]{3}" maxlength="3" required></label>
+        <label>Restaurant <span class="optional">optional</span><input name="restaurant_name" maxlength="200" placeholder="Read from the menu"></label>
+        <label>Branch <span class="optional">optional</span><input name="branch_name" maxlength="200" placeholder="Main"></label>
+        <label>Default currency<input name="currency" value="BDT" pattern="[A-Z]{3}" maxlength="3" required title="Three-letter ISO code, used when the menu shows no currency"></label>
       </div>
-      <label>Menu files<input type="file" name="files" multiple required accept=".csv,.pdf,.png,.jpg,.jpeg,.webp"></label>
-      <p class="help">CSV, PDF or photos · Up to 5 files, 10 MiB each</p>
+      <label>Menu files<input type="file" name="files" multiple required accept=".csv,.tsv,.xlsx,.xlsm,.xls,.pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,image/*"></label>
+      <p class="help">Photos, designed or scanned menus, PDF, Excel, CSV, Word or text · Up to 10 files, 25 MiB each</p>
+      <p class="help" id="ai-status"></p>
       <div class="actions"><button>Extract menu</button><a href="/sample.csv">Download example CSV</a></div>
     </form>
   </section>

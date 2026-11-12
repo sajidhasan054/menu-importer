@@ -19,3 +19,4 @@ article{border-top:1px solid #d8dfd7;padding:16px 0}
 .variant{padding:12px;background:#f2f5ef;border-radius:8px;margin:8px 0}
 .variant .fields{margin:0 0 8px}
 .help,#review-status{white-space:pre-wrap}
+.optional{font-weight:400;color:#56675e;font-size:.85em}
