@@ -16,7 +16,7 @@
       </div>
       <label>Menu files<input type="file" name="files" multiple required accept=".csv,.pdf,.png,.jpg,.jpeg,.webp"></label>
       <p class="help">CSV, PDF or photos · Up to 5 files, 10 MiB each</p>
-      <div class="actions"><button>Extract menu</button><a href="/sample.csv">Download sample CSV</a></div>
+      <div class="actions"><button>Extract menu</button><a href="/sample.csv">Download example CSV</a></div>
     </form>
   </section>
   <p id="status" role="status"></p>
@@ -30,7 +30,7 @@
       <textarea id="draft" rows="12" aria-label="Menu JSON" spellcheck="false"></textarea>
       <button id="apply" type="button" class="secondary">Apply JSON changes</button>
     </details>
-    <div class="actions"><button id="publish" type="button">Publish menu</button><button id="download" type="button" class="secondary">Download draft JSON</button><a id="published" hidden>Open published JSON</a></div>
+    <div class="actions"><button id="publish" type="button">Publish menu</button><button id="download-csv" type="button" class="secondary">Download extracted CSV</button><button id="download" type="button" class="secondary">Download draft JSON</button><a id="published" hidden>Open published JSON</a></div>
     <p id="review-status" role="status"></p>
   </section>
 </main>

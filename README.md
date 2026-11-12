@@ -44,6 +44,14 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8000
 
 Open the forwarded port in the browser and keep its visibility private.
 
+## Download results
+
+After extracting and reviewing a menu, select **Download extracted CSV**.
+It exports the current draft with one row per priced option or serving size.
+The CSV uses UTF-8 with a BOM for spreadsheet apps. Use **Download draft JSON**
+to retain the nested structure and source evidence. **Download example CSV**
+provides a separate sample file to practice importing.
+
 ## Import formats
 
 - **CSV:** UTF-8, with a header and one row per portion. Rows with the same

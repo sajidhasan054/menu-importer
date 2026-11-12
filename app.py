@@ -1,18 +1,20 @@
 from contextlib import closing
+import csv
+import io
 import os
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pypdf.errors import PyPdfError
 from pypdfium2 import PdfiumError
 
 from importer import read_menu
-from schema import Currency, Menu, Source
+from schema import Currency, Item, Menu, Source, Variant
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Menu Importer", version="1.0")
@@ -35,7 +37,7 @@ def index():
 
 @app.get("/sample.csv", include_in_schema=False)
 def sample():
-    return FileResponse(ROOT / "examples" / "menu.csv", filename="menu.csv")
+    return FileResponse(ROOT / "examples" / "menu.csv", filename="sample-menu.csv", media_type="text/csv")
 
 
 @app.get("/api/schema")
@@ -79,6 +81,38 @@ def import_menu(
 @app.post("/api/validate")
 def validate(menu: Menu):
     return menu
+
+
+def spreadsheet_cell(value):
+    if isinstance(value, list):
+        value = "|".join(value)
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
+
+@app.post("/api/export/csv", response_class=Response)
+def export_csv(menu: Menu):
+    if not menu.items:
+        raise HTTPException(422, "Add at least one menu item before exporting.")
+    item_columns = [field for field in Item.model_fields if field not in {"variants", "sources"}]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["restaurant_name", "branch_name", *item_columns, *Variant.model_fields])
+    for item in menu.items:
+        item_values = [spreadsheet_cell(getattr(item, field)) for field in item_columns]
+        for variant in item.variants:
+            variant_values = variant.model_dump()
+            if variant.price_amount is not None:
+                variant_values["price_amount"] = format(variant.price_amount, "f")
+            writer.writerow([
+                spreadsheet_cell(menu.restaurant_name), spreadsheet_cell(menu.branch_name),
+                *item_values, *(spreadsheet_cell(value) for value in variant_values.values()),
+            ])
+    return Response(
+        output.getvalue().encode("utf-8-sig"), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="extracted-menu.csv"'},
+    )
 
 
 @app.post("/api/menus", status_code=201)

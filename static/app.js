@@ -151,10 +151,35 @@ byId("publish").onclick = async () => {
     control.disabled = false;
   }
 };
-byId("download").onclick = () => {
+function saveDownload(blob, filename) {
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(new Blob([draft.value], {type:"application/json"}));
-  link.download = "menu.json";
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+byId("download-csv").onclick = async () => {
+  const control = byId("download-csv");
+  control.disabled = true;
+  try {
+    const response = await fetch("/api/export/csv", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: draft.value,
+    });
+    if (!response.ok) {
+      const {detail} = await response.json();
+      const message = Array.isArray(detail) ? detail.map(error => error.msg).join(" ") : detail;
+      throw new Error(message || "CSV export failed.");
+    }
+    saveDownload(await response.blob(), "extracted-menu.csv");
+    reviewStatus.textContent = "CSV downloaded.";
+  } catch (error) {
+    reviewStatus.textContent = error.message;
+  } finally {
+    control.disabled = false;
+  }
+};
+
+byId("download").onclick = () => {
+  saveDownload(new Blob([draft.value], {type:"application/json"}), "menu.json");
 };
