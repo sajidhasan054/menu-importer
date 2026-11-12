@@ -151,6 +151,36 @@ def parse_line(raw, locator, currency):
     return Item(name=name, variants=variants, sources=[Source(locator=locator, raw_text=raw)])
 
 
+def parse_decimal_row(raw, locator, currency):
+    """Recover item/price pairs from OCR that merged adjacent columns."""
+    line = re.sub(r"\s+(?:[0-9]+%|[~≈]\s*[0-9]+)$", "", normalize(raw))
+    if re.search(r"[$৳/]|\b(?:USD|BDT|EUR|GBP|from)\b", line, re.I):
+        return [], False
+    tokens = list(re.finditer(rf"(?<!\S){NUMBER}(?!\S)", line))
+    if not tokens or tokens[-1].end() != len(line):
+        return [], False
+    if not any("." in token[0] for token in tokens):
+        return [], False
+
+    items = []
+    start = 0
+    for token in tokens:
+        name = line[start:token.start()].strip(" \t=–—:‘’'")
+        if not re.fullmatch(r"[^\W\d_](?:[^\W\d_]|[ &’'(),.-])*", name):
+            return [], False
+        amount = number(token[0]) if "." in token[0] else None
+        items.append(Item(
+            name=name,
+            variants=[Variant(
+                currency=currency, price_amount=amount,
+                price_type="fixed" if amount is not None else "unknown",
+            )],
+            sources=[Source(locator=locator, raw_text=raw)],
+        ))
+        start = token.end()
+    return items, any(item.variants[0].price_amount is None for item in items)
+
+
 def ocr(image):
     image = ImageOps.exif_transpose(image)
     image.thumbnail((3200, 3200))
@@ -219,14 +249,18 @@ def read_menu(data, filename, currency):
             locator = f"{page}, extracted line {index}"
             try:
                 item = parse_line(raw, locator, currency)
+                extracted, needs_price_check = ([item], False) if item else parse_decimal_row(raw, locator, currency)
             except ValueError:
-                item = None
-            if item is None:
+                extracted, needs_price_check = [], False
+            if not extracted:
                 issues.append(Source(locator=locator, raw_text=raw))
-            else:
+                continue
+            if needs_price_check:
+                issues.append(Source(locator=locator, raw_text=f"Confirm the blank price against the menu: {raw}"))
+            if "$" in raw and currency not in DOLLAR_CURRENCIES and not warned_dollar_currency:
+                issues.append(Source(locator=locator, raw_text="Dollar prices were entered as USD. Check the currency before publishing."))
+                warned_dollar_currency = True
+            for item in extracted:
                 item.section = section
-                if "$" in raw and currency not in DOLLAR_CURRENCIES and not warned_dollar_currency:
-                    issues.append(Source(locator=locator, raw_text="Dollar prices were entered as USD. Check the currency before publishing."))
-                    warned_dollar_currency = True
-                items.append(item)
+            items.extend(extracted)
     return items, issues

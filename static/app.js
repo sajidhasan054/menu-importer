@@ -116,7 +116,10 @@ upload.onsubmit = async event => {
     byId("review").hidden = false;
     byId("published").hidden = true;
     reviewStatus.textContent = "";
-    byId("status").textContent = menu.items.length + " items extracted. Check each portion and price before publishing.";
+    issues.open = result.review_issues.length > 0 && menu.items.length === 0;
+    byId("status").textContent = menu.items.length
+      ? menu.items.length + " items extracted. Check each portion and price before publishing."
+      : "No items could be extracted. Review the text below or try a clearer menu image.";
     render();
   } catch (error) {
     byId("status").textContent = error.message;

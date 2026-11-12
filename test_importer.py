@@ -1,7 +1,8 @@
+from decimal import Decimal
 import unittest
 from pathlib import Path
 
-from importer import parse_line, read_csv
+from importer import parse_decimal_row, parse_line, read_csv
 
 
 class ImportTests(unittest.TestCase):
@@ -22,6 +23,26 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(parse_line(line, "photo", "CAD").variants[0].currency, "CAD")
         self.assertIsNone(parse_line("Pizza   $12   $15", "photo", "USD"))
         self.assertIsNone(parse_line("Pizza   $12   15", "photo", "USD"))
+
+    def test_merged_menu_rows_recover_items_without_guessing_missing_decimals(self):
+        cases = [
+            ("GREEK SALAD 5.00 LENGUADO 12.00", [("GREEK SALAD", 5), ("LENGUADO", 12)], False),
+            ("TORTILLA ESPANOLA 480 BACALAO FRITO 7.00", [("TORTILLA ESPANOLA", None), ("BACALAO FRITO", 7)], True),
+            ("OLIVAS RELLENAS 6.00 PAELLA MIXTA 8.60", [("OLIVAS RELLENAS", 6), ("PAELLA MIXTA", "8.60")], False),
+            ("VERDURAS CON OLIVADA = 8.50 LOMO DE SALMON 1160", [("VERDURAS CON OLIVADA", "8.50"), ("LOMO DE SALMON", None)], True),
+            ("LASAGNE 3.00 POLLO AL HORNO 8.00", [("LASAGNE", 3), ("POLLO AL HORNO", 8)], False),
+            ("FRIES 2.00 4%", [("FRIES", 2)], False),
+            ("‘ONION RINGS 4.00 ~ 3", [("ONION RINGS", 4)], False),
+        ]
+        for line, expected, needs_review in cases:
+            with self.subTest(line=line):
+                items, review = parse_decimal_row(line, "photo", "USD")
+                self.assertEqual(review, needs_review)
+                self.assertEqual(
+                    [(item.name, item.variants[0].price_amount) for item in items],
+                    [(name, None if price is None else Decimal(price)) for name, price in expected],
+                )
+        self.assertEqual(parse_decimal_row("Pizza 5.00 6.00", "photo", "USD"), ([], False))
 
     def test_csv_groups_variants(self):
         items, issues = read_csv(Path("examples/menu.csv").read_bytes(), "BDT")
