@@ -14,6 +14,15 @@ class ImportTests(unittest.TestCase):
     def test_ambiguous_prices_stay_unmatched(self):
         self.assertIsNone(parse_line("Pizza   220   350", "page 1", "BDT"))
 
+    def test_dollar_price_uses_dollar_currency_and_ignores_ocr_noise(self):
+        line = "Vi. oS        :     Fruit Salad          $13        3    SY"
+        item = parse_line(line, "photo", "BDT")
+        self.assertEqual((item.name, item.variants[0].price_amount), ("Fruit Salad", 13))
+        self.assertEqual(item.variants[0].currency, "USD")
+        self.assertEqual(parse_line(line, "photo", "CAD").variants[0].currency, "CAD")
+        self.assertIsNone(parse_line("Pizza   $12   $15", "photo", "USD"))
+        self.assertIsNone(parse_line("Pizza   $12   15", "photo", "USD"))
+
     def test_csv_groups_variants(self):
         items, issues = read_csv(Path("examples/menu.csv").read_bytes(), "BDT")
         self.assertFalse(issues)

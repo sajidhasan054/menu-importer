@@ -28,6 +28,22 @@ OCR_LANG=eng+ben uvicorn app:app
 
 English OCR is the default. CSV and text PDFs do not require Tesseract.
 
+## Run in GitHub Codespaces
+
+Open the repository in GitHub, then select **Code → Codespaces → Create
+codespace on main**. The dev container installs the Python requirements and
+English and Bengali OCR. For a pre-existing Codespace, pull the latest changes
+and use **Codespaces: Rebuild Container** from the command palette, or install
+Tesseract manually using the commands above.
+
+After setup finishes, start the app with:
+
+```bash
+python -m uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Open the forwarded port in the browser and keep its visibility private.
+
 ## Import formats
 
 - **CSV:** UTF-8, with a header and one row per portion. Rows with the same

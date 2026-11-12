@@ -23,6 +23,12 @@ PRICE = re.compile(
     re.I,
 )
 SEGMENTS = re.compile(r"\s*/\s*")
+DOLLAR_PRICE = re.compile(rf"(?P<name>.+?)\s+\$\s*(?P<amount>{NUMBER})(?=\s{{2,}}|$)")
+SECTIONS = re.compile(
+    r"main courses?|appeti[sz]ers?|beverages?|drinks?|starters?|desserts?|salads?|soups?|sides?",
+    re.I,
+)
+DOLLAR_CURRENCIES = {"USD", "CAD", "AUD", "NZD", "SGD", "HKD"}
 PDFIUM_LOCK = Lock()
 ALIASES = {
     "item": "name", "item_name": "name", "dish": "name", "নাম": "name",
@@ -105,6 +111,19 @@ def read_csv(data, currency):
 
 def parse_line(raw, locator, currency):
     line = normalize(raw)
+    dollar = DOLLAR_PRICE.match(line)
+    if dollar and line.count("$") == 1 and not re.fullmatch(NUMBER, line[dollar.end():].strip()):
+        name = re.split(r"\s{2,}", dollar["name"])[-1].strip()
+        if name and name[0].isalpha() and not re.search(PORTION, name, flags=re.I):
+            return Item(
+                name=name,
+                variants=[Variant(
+                    price_amount=number(dollar["amount"]),
+                    price_type="fixed",
+                    currency=currency if currency in DOLLAR_CURRENCIES else "USD",
+                )],
+                sources=[Source(locator=locator, raw_text=raw)],
+            )
     # Require a visible separator or currency for an unlabelled trailing price.
     split = re.split(r"\s{2,}|\s+[-–—:]\s+|\s+(?=৳|BDT\s|from\s|[0-9]+\s*(?:pcs?\b|pieces?\b|পিস|g\b|grams?\b|গ্রাম|ml\b|মিলি))", line, maxsplit=1, flags=re.I)
     if len(split) != 2:
@@ -185,8 +204,17 @@ def read_menu(data, filename, currency):
     for page, content in pages:
         if not content.strip():
             issues.append(Source(locator=page, raw_text="No text extracted."))
+        section = None
+        warned_dollar_currency = False
         for index, raw in enumerate(content.splitlines(), 1):
             if not raw.strip():
+                continue
+            heading = next(
+                (part for part in re.split(r"\s{2,}", raw.strip()) if SECTIONS.fullmatch(part)),
+                None,
+            )
+            if heading and not re.search(r"[$৳]", raw):
+                section = heading.title()
                 continue
             locator = f"{page}, extracted line {index}"
             try:
@@ -196,5 +224,9 @@ def read_menu(data, filename, currency):
             if item is None:
                 issues.append(Source(locator=locator, raw_text=raw))
             else:
+                item.section = section
+                if "$" in raw and currency not in DOLLAR_CURRENCIES and not warned_dollar_currency:
+                    issues.append(Source(locator=locator, raw_text="Dollar prices were entered as USD. Check the currency before publishing."))
+                    warned_dollar_currency = True
                 items.append(item)
     return items, issues
