@@ -13,10 +13,5 @@
       "label": "Menu Importer",
       "onAutoForward": "notify"
     }
-  },
-  "secrets": {
-    "ANTHROPIC_API_KEY": {
-      "description": "Anthropic API key for AI menu reading (photos, designed menus, any language)."
-    }
   }
 }

@@ -18,15 +18,13 @@ def main(argv=None):
     parser.add_argument("--currency", default="BDT", help="Fallback ISO currency when the menu shows none")
     parser.add_argument("--restaurant", default="")
     parser.add_argument("--branch", default="Main")
-    parser.add_argument("--no-ai", action="store_true", help="Use only the offline parsers")
     parser.add_argument("--all-columns", action="store_true", help="Keep columns that are empty for every row")
     args = parser.parse_args(argv)
 
     items, restaurant = [], args.restaurant
     for path in args.files:
         try:
-            extracted, issues, info = read_menu(path.read_bytes(), path.name, args.currency.upper(),
-                                                use_ai=False if args.no_ai else None)
+            extracted, issues, info = read_menu(path.read_bytes(), path.name, args.currency.upper())
         except (ValueError, OSError) as error:
             print(f"{path.name}: {error}", file=sys.stderr)
             continue

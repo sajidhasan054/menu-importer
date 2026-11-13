@@ -1,0 +1,9 @@
+[
+  ["eng", "English"], ["ben", "Bangla"], ["hin", "Hindi"], ["urd", "Urdu"], ["ara", "Arabic"], ["fas", "Persian"],
+  ["tur", "Turkish"], ["fra", "French"], ["deu", "German"], ["spa", "Spanish"], ["ita", "Italian"], ["por", "Portuguese"],
+  ["nld", "Dutch"], ["swe", "Swedish"], ["pol", "Polish"], ["ces", "Czech"], ["hun", "Hungarian"], ["ron", "Romanian"],
+  ["ell", "Greek"], ["rus", "Russian"], ["ukr", "Ukrainian"], ["heb", "Hebrew"], ["chi_sim", "Chinese (Simplified)"],
+  ["chi_tra", "Chinese (Traditional)"], ["jpn", "Japanese"], ["kor", "Korean"], ["tha", "Thai"], ["vie", "Vietnamese"],
+  ["ind", "Indonesian"], ["msa", "Malay"], ["nep", "Nepali"], ["mar", "Marathi"], ["guj", "Gujarati"], ["pan", "Punjabi"],
+  ["tam", "Tamil"], ["tel", "Telugu"], ["kan", "Kannada"], ["mal", "Malayalam"], ["sin", "Sinhala"]
+]

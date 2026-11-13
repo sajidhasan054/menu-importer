@@ -12,9 +12,8 @@ import zipfile
 
 import pypdfium2 as pdfium
 from PIL import Image, ImageOps
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader
 
-import ai_extract
 from schema import Item, Source, Variant
 
 try:
@@ -138,8 +137,7 @@ def table_items(rows, currency, origin="CSV"):
     """Parse rows that have a recognizable header. Returns (items, issues, complete).
 
     complete is False when the table has no name column, or when it has
-    unrecognized numeric columns (for example Small/Large price columns) that a
-    smarter reader should interpret.
+    unrecognized numeric columns (for example Small/Large price columns).
     """
     header_index, headers = find_header(rows)
     if header_index is None:
@@ -317,8 +315,7 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".ti
 SPREADSHEET_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
 TEXT_SUFFIXES = {".txt", ".md"}
 SUPPORTED = sorted({".csv", ".tsv", ".pdf", ".docx", *IMAGE_SUFFIXES, *SPREADSHEET_SUFFIXES, *TEXT_SUFFIXES})
-MAX_PDF_PAGES = 40
-TABLE_CHUNK_ROWS = 150
+MAX_PDF_PAGES = 15
 WORD = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -349,104 +346,28 @@ def open_image(data):
     return image
 
 
-def rows_text(rows):
-    output = io.StringIO()
-    writer = csv.writer(output)
-    for row in rows:
-        while row and not row[-1]:
-            row = row[:-1]
-        writer.writerow(row)
-    return output.getvalue()
-
-
-def table_parts(sheets):
-    """Split spreadsheet rows into AI-sized chunks, repeating the header row."""
-    parts = []
-    for sheet, rows in sheets:
-        rows = [row for row in rows if any(cell.strip() for cell in row)]
-        if not rows:
-            continue
-        header_index, _ = find_header(rows)
-        header = rows[: (header_index or 0) + 1] if len(rows) > 1 else []
-        body = rows[len(header):]
-        for start in range(0, len(body), TABLE_CHUNK_ROWS):
-            chunk = body[start:start + TABLE_CHUNK_ROWS]
-            first, last = start + len(header) + 1, start + len(header) + len(chunk)
-            label = f"Sheet {sheet!r}, rows {first}–{last}" if sheet else f"Rows {first}–{last}"
-            text = rows_text(header + chunk)
-            parts.append((label, [ai_extract.text_block(f"Spreadsheet{' sheet ' + repr(sheet) if sheet else ''} as CSV:\n\n{text}")],
-                          "spreadsheet"))
-    return parts
-
-
-def split_pdf(data):
-    reader = PdfReader(io.BytesIO(data))
-    if len(reader.pages) > MAX_PDF_PAGES:
-        raise ValueError(f"Upload up to {MAX_PDF_PAGES} PDF pages at a time.")
-    pages = []
-    for page in reader.pages:
-        writer = PdfWriter()
-        writer.add_page(page)
-        buffer = io.BytesIO()
-        writer.write(buffer)
-        pages.append(buffer.getvalue())
-    return pages
-
-
-def read_menu(data, filename, currency, use_ai=None):
-    """Extract menu items from one file.
-
-    Returns (items, review_issues, info) where info has the extraction method
-    and, when the AI reader found one, the restaurant name.
-    """
+def read_menu(data, filename, currency):
+    """Extract menu items from one file. Returns (items, review_issues, info)."""
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED:
         raise ValueError("Upload a menu as a photo, PDF, Excel, CSV, Word or text file.")
-    use_ai = ai_extract.enabled() if use_ai is None else use_ai
 
-    try:
-        return _read_menu(data, filename, suffix, currency, use_ai)
-    except ai_extract.AIUnavailable as error:
-        items, issues, info = _read_menu(data, filename, suffix, currency, False)
-        issues.insert(0, Source(locator=filename, raw_text=f"{error} Used the basic reader instead."))
-        return items, issues, info
-
-
-def _read_menu(data, filename, suffix, currency, use_ai):
-    # Spreadsheets: read clean tables directly; let the AI interpret messy ones.
     if suffix in (".csv", ".tsv", *SPREADSHEET_SUFFIXES):
-        if suffix in SPREADSHEET_SUFFIXES:
-            sheets = excel_sheets(data, suffix)
-        else:
-            sheets = [("", csv_rows(data))]
+        sheets = excel_sheets(data, suffix) if suffix in SPREADSHEET_SUFFIXES else [("", csv_rows(data))]
         origin = lambda sheet: f"Sheet {sheet!r}" if sheet else suffix.lstrip(".").upper()
-        items, issues, complete = [], [], True
+        items, issues = [], []
         for sheet, rows in sheets:
-            sheet_items, sheet_issues, sheet_complete = table_items(rows, currency, origin(sheet))
-            if not sheet_items and not any(cell.strip() for row in rows for cell in row):
-                continue
+            sheet_items, sheet_issues, _ = table_items(rows, currency, origin(sheet))
             items += sheet_items
             issues += sheet_issues
-            complete = complete and sheet_complete
-        if complete and items:
-            return items, issues, {"method": "table"}
-        if use_ai:
-            items, issues, restaurant = ai_extract.extract_parts(table_parts(sheets), currency)
-            return items, issues, {"method": "ai", "restaurant_name": restaurant}
         if items or issues:
             return items, issues, {"method": "table"}
-        raise ValueError("No item name column was found. Add a header such as name, section, price, "
-                         "or set ANTHROPIC_API_KEY so the AI reader can interpret the layout.")
+        raise ValueError("No item name column was found. Add a header such as name, section, price.")
 
     if suffix == ".pdf":
-        if use_ai:
-            parts = [(f"PDF page {index}", [ai_extract.pdf_block(page)], "PDF menu page")
-                     for index, page in enumerate(split_pdf(data), 1)]
-            items, issues, restaurant = ai_extract.extract_parts(parts, currency)
-            return items, issues, {"method": "ai", "restaurant_name": restaurant}
         pdf = PdfReader(io.BytesIO(data))
-        if len(pdf.pages) > 15:
-            raise ValueError("Upload up to 15 PDF pages at a time.")
+        if len(pdf.pages) > MAX_PDF_PAGES:
+            raise ValueError(f"Upload up to {MAX_PDF_PAGES} PDF pages at a time.")
         pages = (
             (f"PDF page {index + 1}", page.extract_text(extraction_mode="layout").strip()
              or ocr(pdf_image(data, index)))
@@ -454,23 +375,9 @@ def _read_menu(data, filename, suffix, currency, use_ai):
         )
     elif suffix in IMAGE_SUFFIXES:
         with open_image(data) as image:
-            if use_ai:
-                frames = getattr(image, "n_frames", 1)
-                parts = []
-                for frame in range(min(frames, 10) if suffix in (".tif", ".tiff") else 1):
-                    image.seek(frame)
-                    locator = filename if frames == 1 else f"{filename} page {frame + 1}"
-                    parts.append((locator, [ai_extract.image_block(image.copy())], "menu photo or image"))
-                items, issues, restaurant = ai_extract.extract_parts(parts, currency)
-                return items, issues, {"method": "ai", "restaurant_name": restaurant}
             pages = [(filename, ocr(image))]
     else:
-        text = docx_text(data) if suffix == ".docx" else decode_text(data)
-        if use_ai:
-            parts = [(filename, [ai_extract.text_block(f"Menu text:\n\n{text}")], "menu text")]
-            items, issues, restaurant = ai_extract.extract_parts(parts, currency)
-            return items, issues, {"method": "ai", "restaurant_name": restaurant}
-        pages = [(filename, text)]
+        pages = [(filename, docx_text(data) if suffix == ".docx" else decode_text(data))]
     items, issues = parse_pages(pages, currency)
     return items, issues, {"method": "ocr" if suffix in IMAGE_SUFFIXES else "text"}
 

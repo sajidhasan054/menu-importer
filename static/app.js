@@ -120,9 +120,8 @@ upload.onsubmit = async event => {
     byId("published").hidden = true;
     reviewStatus.textContent = "";
     issues.open = result.review_issues.length > 0 && menu.items.length === 0;
-    const via = result.methods.includes("ai") ? " with AI vision" : "";
     byId("status").textContent = menu.items.length
-      ? menu.items.length + " items extracted" + via + ". Check each portion and price, then download the CSV."
+      ? menu.items.length + " items extracted. Check each portion and price, then download the CSV."
       : "No items could be extracted. Review the text below or try a clearer menu image.";
     render();
   } catch (error) {
@@ -131,12 +130,6 @@ upload.onsubmit = async event => {
     submit.disabled = false;
   }
 };
-
-fetch("/api/status").then(response => response.json()).then(status => {
-  byId("ai-status").textContent = status.ai_enabled
-    ? "AI reading is on: menus in any language and layout are supported."
-    : "AI reading is off. Set ANTHROPIC_API_KEY to read photos, designed menus and other languages accurately. Clean CSV and Excel files work without it.";
-}).catch(() => {});
 
 byId("add").onclick = () => { menu.items.push({name:"", variants:[emptyVariant()]}); render(); };
 byId("apply").onclick = async () => {

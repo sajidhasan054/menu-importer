@@ -12,7 +12,6 @@ from PIL import Image
 from pypdf.errors import PyPdfError
 from pypdfium2 import PdfiumError
 
-import ai_extract
 from export import menu_csv
 from importer import SUPPORTED, read_menu
 from schema import Currency, Menu, Source
@@ -49,8 +48,6 @@ def schema():
 @app.get("/api/status")
 def status():
     return {
-        "ai_enabled": ai_extract.enabled(),
-        "ai_model": ai_extract.MODEL if ai_extract.enabled() else None,
         "formats": SUPPORTED,
     }
 
