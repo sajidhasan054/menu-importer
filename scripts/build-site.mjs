@@ -34,4 +34,6 @@ for (const [code] of languages) {
   if (!existsSync(join(modules, file))) { console.warn(`missing OCR language ${code}`); missing++; continue; }
   copy(file, `lang/${code}.traineddata.gz`);
 }
+// Orientation and script detection (used to straighten photos and pick languages).
+copy("@tesseract.js-data/osd/4.0.0/osd.traineddata.gz", "lang/legacy/osd.traineddata.gz");
 console.log(`Built ${out}/ with ${languages.length - missing} OCR languages.`);

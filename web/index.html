@@ -31,7 +31,8 @@
     <div class="options">
       <details class="languages" id="languages">
         <summary>Menu languages: <span id="language-summary">English</span></summary>
-        <p class="help">Pick the languages printed on the menu. Each one downloads once (1–10 MB) and is then cached. Fewer languages read faster.</p>
+        <label class="toggle"><input type="checkbox" id="auto-lang" checked> Detect the language of each photo</label>
+        <p class="help">Detection picks the script (Arabic, Bangla, Chinese…) and spots French, Spanish, German and other Latin-script menus. Ticking the languages yourself is faster and more reliable. Each language downloads once (1–10 MB) and is then cached.</p>
         <div id="language-list" class="language-list"></div>
       </details>
       <label>Default currency
@@ -42,9 +43,36 @@
         <select id="layout">
           <option value="auto">Find columns automatically</option>
           <option value="single">One column only</option>
+          <option value="page">Paragraph layout (try if words are missing)</option>
         </select>
       </label>
     </div>
+
+    <details class="advanced">
+      <summary>More reading settings</summary>
+      <div class="options">
+        <label>Image cleanup
+          <select id="cleanup">
+            <option value="auto">Normal</option>
+            <option value="strong">Strong (shadows, patterns, pictures)</option>
+            <option value="off">Off (use the photo as it is)</option>
+          </select>
+        </label>
+        <label>Skip unclear text: <output id="min-conf-value"></output>
+          <input type="range" id="min-conf" min="0" max="90" step="5">
+          <span class="help">Higher drops more picture noise but may lose faint words.</span>
+        </label>
+        <label>Enlarge small text
+          <select id="upscale">
+            <option value="auto">Automatic</option>
+            <option value="2">Always 2×</option>
+            <option value="1">Never</option>
+          </select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="auto-rotate" checked> Straighten tilted and sideways photos</label>
+      </div>
+      <p class="help">Changes apply to new files. Select <b>Read again</b> on a page to use them there.</p>
+    </details>
 
     <details class="paste">
       <summary>Or paste menu text or a table</summary>
@@ -92,7 +120,9 @@
     <ul>
       <li>Photograph the menu straight on, in good light, filling the frame. Take one photo per page or column.</li>
       <li>Use <b>Rotate</b> if a page is sideways, and <b>Invert colors</b> for light text on a dark background.</li>
-      <li>Choose <b>One column only</b> if the items come out in the wrong order.</li>
+      <li>Menu with lots of pictures? Use <b>Select areas</b> on the page and drag boxes around the text you want; only those parts are read. <b>Strong</b> image cleanup also helps.</li>
+      <li>Choose <b>One column only</b> if the items come out in the wrong order, or <b>Paragraph layout</b> if whole lines are missing.</li>
+      <li>Wrong letters or accents (French é, Spanish ñ)? Tick the menu's language under <b>Menu languages</b> and select <b>Read again</b>.</li>
       <li>For a very decorative menu, a free AI chat app (such as Claude, ChatGPT or Gemini) can read it: attach the photo, paste the prompt below, then paste the reply into <b>Or paste menu text or a table</b>.
         <button type="button" id="copy-prompt" class="secondary small">Copy prompt</button></li>
     </ul>

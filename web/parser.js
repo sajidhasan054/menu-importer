@@ -98,7 +98,9 @@ const WIDE_GAP = "   ";
  * Returns {name, prices: [{amount, currency, portion}], wide} or null when no price.
  */
 export function parseLine(rawLine, defaultCurrency = "USD") {
-  let line = normalizeDigits(rawLine).replace(LEADERS, WIDE_GAP).replace(/\s+$/, "");
+  let line = normalizeDigits(rawLine).replace(LEADERS, WIDE_GAP).replace(/\s+$/, "")
+    // OCR sometimes reads a decimal comma as a colon: "3:50 €"
+    .replace(new RegExp(String.raw`(\d):(\d{2})(?=\s?(?:${CURRENCY_RE}))`, "gu"), "$1.$2");
   // Price segments split by "/" or "|" each carrying a portion: "6 pcs 180 / 12 pcs 320"
   const prices = [];
   let rest = line;
@@ -320,87 +322,200 @@ function cleanName(name) {
 
 // ---------------------------------------------------------------- OCR layout
 
+const RTL_CHARS = /[֐-ࣿיִ-﷿ﹰ-﻿]/u;
+const LETTER = /[\p{L}]/u;
+
+export function isRightToLeft(text) {
+  const letters = [...text].filter(ch => LETTER.test(ch));
+  return letters.length > 0 && letters.filter(ch => RTL_CHARS.test(ch)).length / letters.length > 0.5;
+}
+
+/** True for OCR "words" that are picture noise rather than text: "|", "~~", "®©", "|l1|". */
+function isJunkWord(word) {
+  const text = word.text.trim();
+  if (!text) return true;
+  if (new RegExp(`^(${CURRENCY_RE})$`, "u").test(text)) return false;
+  if (!/[\p{L}\p{N}]/u.test(text)) return !/^[&+/\-–—:()*#]$/.test(text); // keep lone separators that matter
+  // Mostly symbols, or a short mix of letters and pipes typical of OCR on photos.
+  const good = [...text].filter(ch => /[\p{L}\p{N}\p{M}.,'’%-]/u.test(ch)).length;
+  return good / [...text].length < 0.5 || /^[|!lI1]{2,}$/.test(text);
+}
+
 /**
  * Turn positioned words (from OCR or a PDF text layer) into reading-order text.
  * Detects menu columns, keeps price columns attached to their item column,
  * marks large text as "# " headings, and puts a wide gap before prices.
  * Lines that span several columns (titles, centred headings) split the page
- * into bands that are read one after another.
+ * into bands that are read one after another. Arabic, Persian, Urdu and
+ * Hebrew lines are read right to left.
+ *
  * words: [{text, x0, y0, x1, y1, conf?}]
+ * options.minConfidence: drop OCR words below this confidence (0-100). Words
+ *   with digits are kept a little longer since prices matter most.
  */
-export function layoutText(words, { splitColumns = true } = {}) {
-  words = words.filter(w => w.text && w.text.trim() && (w.conf === undefined || w.conf >= 35 || /\d/.test(w.text) || w.text.length > 2));
+export function layoutText(words, { splitColumns = true, minConfidence = 40, rtl = "auto" } = {}) {
+  words = words.filter(w => w.text && w.text.trim() && !isJunkWord(w));
   if (!words.length) return "";
+  const h0 = Math.max(1, median(words.map(w => w.y1 - w.y0)));
+  words = words.filter(w => {
+    if (w.conf === undefined) return true;
+    const limit = /\d/.test(w.text) ? minConfidence - 15 : minConfidence;
+    if (w.conf < limit) return false;
+    // Huge low-confidence "words" are usually pictures or ornaments.
+    return !(w.y1 - w.y0 > h0 * 4 && w.conf < 85);
+  });
+  if (!words.length) return "";
+  const pageRtl = rtl === "auto" ? isRightToLeft(words.map(w => w.text).join(" ")) : Boolean(rtl);
   const h = Math.max(1, median(words.map(w => w.y1 - w.y0)));
   const lines = [];
-  const cuts = splitColumns ? findCuts(words, h) : [];
+  const clusters = clusterWords(words, h);
+  const cuts = splitColumns ? findCuts(clusters, h, pageRtl) : [];
+  const ordered = columns => (pageRtl ? [...columns].reverse() : columns);
   if (!cuts.length) {
-    lines.push(...groupLines(words, h).map(l => l.text));
+    lines.push(...groupLines(words, h, pageRtl));
   } else {
-    // A word crossing a gutter makes its whole line a spanning line (title, centred heading).
-    const crossing = words.filter(w => cuts.some(c => w.x0 < c && w.x1 > c));
+    // A phrase crossing a gutter makes its whole line a spanning line (title, centred heading).
+    const crossing = clusters.filter(c => cuts.some(cut => c.x0 < cut && c.x1 > cut));
     const spanning = words.filter(w => crossing.some(c => {
       const center = (w.y0 + w.y1) / 2;
       return center > c.y0 && center < c.y1;
     }));
-    const spanLines = groupLines(spanning, h);
+    const spanLines = groupLines(spanning, h, pageRtl);
     const others = words.filter(w => !spanning.includes(w));
     const bounds = [-Infinity, ...spanLines.map(l => l.center), Infinity];
     for (let i = 0; i < bounds.length - 1; i++) {
-      if (i > 0) lines.push(spanLines[i - 1].text, "");
+      if (i > 0) lines.push(spanLines[i - 1], { text: "" });
       const band = others.filter(w => {
         const c = (w.y0 + w.y1) / 2;
         return c > bounds[i] && c <= bounds[i + 1];
       });
       if (!band.length) continue;
-      for (const column of splitIntoColumns(band, h, findCuts(band, h))) {
-        lines.push(...groupLines(column, h).map(l => l.text), "");
+      const bandCuts = findCuts(clusterWords(band, h), h, pageRtl);
+      for (const column of ordered(splitIntoColumns(band, bandCuts))) {
+        lines.push(...groupLines(column, h, pageRtl), { text: "" });
       }
     }
   }
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return lines
+    .filter(line => line.text === "" || !line.weak)
+    .map(line => line.text)
+    .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function groupLines(words, h) {
+const isPriceWord = text => isPriceText(text) || new RegExp(`^(${CURRENCY_RE})$`, "u").test(text.trim());
+
+/** Group words into rows: a word joins a row it overlaps vertically by at least half its height. */
+function rowsOf(words) {
   const sorted = [...words].sort((a, b) => (a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2);
   const rows = [];
   for (const word of sorted) {
-    const center = (word.y0 + word.y1) / 2;
-    const row = rows.find(r => Math.abs(r.center - center) <= Math.max(h, word.y1 - word.y0) * 0.55);
-    if (row) {
-      row.words.push(word);
-      row.center = (row.center * (row.words.length - 1) + center) / row.words.length;
+    const height = word.y1 - word.y0;
+    let best = null, bestOverlap = 0;
+    for (const row of rows) {
+      const overlap = Math.min(row.y1, word.y1) - Math.max(row.y0, word.y0);
+      const ratio = overlap / Math.max(1, Math.min(height, row.y1 - row.y0));
+      if (ratio > bestOverlap) { best = row; bestOverlap = ratio; }
+    }
+    if (best && bestOverlap >= 0.5) {
+      best.words.push(word);
+      best.y0 = median(best.words.map(w => w.y0));
+      best.y1 = median(best.words.map(w => w.y1));
     } else {
-      rows.push({ center, words: [word] });
+      rows.push({ y0: word.y0, y1: word.y1, words: [word] });
     }
   }
+  return rows;
+}
+
+/** Merge words that sit close together on a row into phrases (boxes). */
+function clusterWords(words, h) {
+  const clusters = [];
+  for (const row of rowsOf(words)) {
+    const ws = [...row.words].sort((a, b) => a.x0 - b.x0);
+    let current = null;
+    for (const w of ws) {
+      if (current && w.x0 - current.x1 <= h * 0.9) {
+        current.x1 = Math.max(current.x1, w.x1);
+        current.y0 = Math.min(current.y0, w.y0);
+        current.y1 = Math.max(current.y1, w.y1);
+        current.text += " " + w.text;
+      } else {
+        current = { x0: w.x0, x1: w.x1, y0: w.y0, y1: w.y1, text: w.text };
+        clusters.push(current);
+      }
+    }
+  }
+  return clusters;
+}
+
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303F\uFF00-\uFFEF]/u;
+
+function groupLines(words, h, pageRtl = false) {
+  const rows = rowsOf(words);
+  for (const row of rows) row.center = (row.y0 + row.y1) / 2;
   rows.sort((a, b) => a.center - b.center);
-  return rows.map(row => {
-    const ws = row.words.sort((a, b) => a.x0 - b.x0);
+
+  // A row of only prices that sits a little above or below a row of only
+  // text (common when prices are printed in a different font or the photo is
+  // tilted) belongs to that text row.
+  const textOnly = row => row.words.some(w => /\p{L}/u.test(w.text)) && !row.words.some(w => isPriceWord(w.text));
+  for (const row of rows) {
+    if (!row.words.length || !row.words.every(w => isPriceWord(w.text))) continue;
+    const left = Math.min(...row.words.map(w => w.x0)), right = Math.max(...row.words.map(w => w.x1));
+    let target = null, distance = Infinity;
+    for (const other of rows) {
+      if (other === row || !other.words.length || !textOnly(other)) continue;
+      const d = Math.abs(other.center - row.center);
+      const otherLeft = Math.min(...other.words.map(w => w.x0)), otherRight = Math.max(...other.words.map(w => w.x1));
+      const beside = pageRtl ? right < otherLeft : left > otherRight;
+      if (beside && d < distance && d <= h * 1.1) { target = other; distance = d; }
+    }
+    if (target) {
+      // Only when no other price row is closer to that text row.
+      const rival = rows.some(r => r !== row && r.words.length && r.words.every(w => isPriceWord(w.text)) && Math.abs(r.center - target.center) < distance);
+      if (!rival) { target.words.push(...row.words); row.words = []; }
+    }
+  }
+
+  return rows.filter(row => row.words.length).map(row => {
+    // On an Arabic page, a line whose leftmost word is a price is also read
+    // right to left, even when OCR got its words wrong.
+    const leftmost = [...row.words].sort((a, b) => a.x0 - b.x0)[0];
+    const lineRtl = row.words.some(w => RTL_CHARS.test(w.text))
+      ? isRightToLeft(row.words.map(w => w.text).join(" ")) || pageRtl
+      : pageRtl && row.words.length > 1 && isPriceWord(leftmost.text);
+    const ws = row.words.sort((a, b) => (lineRtl ? b.x1 - a.x1 : a.x0 - b.x0));
     const rowH = median(ws.map(w => w.y1 - w.y0));
     let text = "";
     ws.forEach((w, i) => {
-      if (i) text += w.x0 - ws[i - 1].x1 > Math.max(h, rowH) * 1.6 ? WIDE_GAP : " ";
+      if (i) {
+        const gap = lineRtl ? ws[i - 1].x0 - w.x1 : w.x0 - ws[i - 1].x1;
+        const glued = gap < Math.max(h, rowH) * 0.8 && CJK.test(ws[i - 1].text.trim().slice(-1)) && CJK.test(w.text.trim()[0]);
+        text += gap > Math.max(h, rowH) * 1.6 ? WIDE_GAP : glued ? "" : " ";
+      }
       text += w.text.trim();
     });
     const heading = rowH > h * 1.35 && parseLine(text) === null && text.length < 50;
-    return { center: row.center, text: heading ? `# ${text}` : text };
+    // A line made only of short, unsure fragments is noise from a picture.
+    const confs = ws.map(w => w.conf).filter(c => c !== undefined);
+    const weak = confs.length > 0 && median(confs) < 60 && !/\d/.test(text) && ws.every(w => w.text.length <= 3);
+    return { center: row.center, text: heading ? `# ${text}` : text, weak };
   });
 }
 
-function findCuts(words, h) {
-  const minX = Math.min(...words.map(w => w.x0));
-  const maxX = Math.max(...words.map(w => w.x1));
+function findCuts(boxes, h, rtl = false) {
+  const minX = Math.min(...boxes.map(w => w.x0));
+  const maxX = Math.max(...boxes.map(w => w.x1));
   const width = maxX - minX;
-  if (width <= 0 || words.length < 4) return [];
+  if (width <= 0 || boxes.length < 4) return [];
   const bucket = Math.max(1, h / 4);
   const n = Math.ceil(width / bucket) + 1;
   const cover = new Array(n).fill(0);
-  for (const w of words) {
+  for (const w of boxes) {
     for (let b = Math.floor((w.x0 - minX) / bucket); b <= Math.floor((w.x1 - minX) / bucket); b++) cover[b]++;
   }
-  // A gutter is a run of x positions that almost no word crosses (titles may span it).
-  const allowance = Math.max(1, Math.floor(words.length * 0.03));
+  // A gutter is a run of x positions that almost no phrase crosses (titles may span it).
+  const allowance = Math.max(1, Math.floor(boxes.length * 0.04));
   const minGap = Math.ceil((h * 2.5) / bucket);
   const cuts = [];
   let start = -1;
@@ -413,19 +528,29 @@ function findCuts(words, h) {
     }
   }
   // Keep only gutters that separate text columns: a column of prices belongs
-  // to the item names on its left.
-  const segments = splitIntoColumns(words, h, cuts, true);
-  return cuts.filter((cut, i) => segments[i + 1]?.length && !isPriceColumn(segments[i + 1]));
+  // to the item names before it (on the left, or on the right in Arabic).
+  const inside = boxes.filter(b => !cuts.some(cut => b.x0 < cut && b.x1 > cut));
+  const segments = splitIntoColumns(inside, cuts, true);
+  return cuts.filter((cut, i) => {
+    const priceSide = rtl ? segments[i] : segments[i + 1];
+    return segments[i].length && segments[i + 1].length && !isPriceColumn(priceSide);
+  });
 }
 
-function isPriceColumn(words) {
-  if (!words.length) return false;
-  const priceLike = words.filter(w => /^[^\p{L}]*\d[\d.,]*[^\p{L}]*$/u.test(normalizeDigits(w.text))
-    || new RegExp(`^(${CURRENCY_RE})$`, "u").test(w.text)).length;
-  return priceLike / words.length >= 0.6;
+const CURRENCY_GLOBAL = new RegExp(CURRENCY_RE, "gu");
+
+/** "12.50", "8,50 €", "৳১৮০", "١٥ ر.س", "$7" — a price with no other words. */
+function isPriceText(text) {
+  const t = normalizeDigits(text).replace(CURRENCY_GLOBAL, " ").replace(/\/[-=]/g, "").trim();
+  return /^[^\p{L}]*\d[\d.,\s]*[^\p{L}]*$/u.test(t) && /\d/.test(t);
 }
 
-function splitIntoColumns(words, h, cuts, keepEmpty = false) {
+function isPriceColumn(boxes) {
+  if (!boxes.length) return false;
+  return boxes.filter(w => isPriceText(w.text)).length / boxes.length >= 0.6;
+}
+
+function splitIntoColumns(words, cuts, keepEmpty = false) {
   if (!cuts.length) return [words];
   const bounds = [-Infinity, ...cuts, Infinity];
   const columns = [];
@@ -442,6 +567,89 @@ function splitIntoColumns(words, h, cuts, keepEmpty = false) {
 function median(values) {
   const s = [...values].sort((a, b) => a - b);
   return s.length ? s[Math.floor(s.length / 2)] : 0;
+}
+
+/**
+ * Combine words from two OCR passes over the same image. Each mode misses
+ * different words (sparse mode skips some names, page mode skips prices), so
+ * words from the second pass are added where the first pass found nothing.
+ */
+export function mergeWordSets(primary, secondary) {
+  let out = [...primary];
+  const area = w => Math.max(1, (w.x1 - w.x0) * (w.y1 - w.y0));
+  const clashes = (a, b) => {
+    const ix = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+    const iy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+    return ix > 0 && iy > 0 && (ix * iy) / Math.min(area(a), area(b)) > 0.4;
+  };
+  for (const word of secondary) {
+    const group = out.filter(o => clashes(o, word));
+    if (!group.length) { out.push(word); continue; }
+    // Replace the overlapping words when this one is clearly more certain, or
+    // when they were weak (often a word split into misread pieces).
+    const conf = word.conf ?? 0;
+    const weakest = Math.min(...group.map(o => o.conf ?? 0));
+    const average = group.reduce((n, o) => n + (o.conf ?? 0), 0) / group.length;
+    if (conf >= weakest + 15 && conf >= average || (weakest < 75 && conf >= average + 5 && conf >= 60)) {
+      out = out.filter(o => !group.includes(o));
+      out.push(word);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- languages
+
+/** OCR languages to use for a script reported by Tesseract's script detection. */
+export const SCRIPT_LANGUAGES = {
+  Arabic: ["ara"], Bengali: ["ben"], Devanagari: ["hin"], Han: ["chi_sim", "chi_tra"], HanS: ["chi_sim"],
+  HanT: ["chi_tra"], Japanese: ["jpn"], Hangul: ["kor"], Korean: ["kor"], Thai: ["tha"], Cyrillic: ["rus"],
+  Greek: ["ell"], Hebrew: ["heb"], Tamil: ["tam"], Telugu: ["tel"], Kannada: ["kan"], Malayalam: ["mal"],
+  Gujarati: ["guj"], Gurmukhi: ["pan"], Sinhala: ["sin"], Katakana: ["jpn"], Hiragana: ["jpn"],
+};
+
+// Common menu words and letters per Latin-script language.
+const LATIN_HINTS = {
+  fra: { words: "le la les de des du et aux au avec sauce poulet boeuf bœuf poisson fromage frites crème glace plat plats entrée entrées dessert desserts boissons vin maison jour salade soupe légumes pommes canard tarte chocolat café thé", chars: "éèêàâçùûôîœë" },
+  spa: { words: "el la los las de del con y al a pollo carne cerdo pescado queso patatas papas salsa ensalada sopa postres bebidas vino casa tortilla jamón arroz huevos tapas ración media", chars: "ñáíóúé¿¡" },
+  ita: { words: "il lo la le di del della con e al alla pollo manzo pesce formaggio pomodoro insalata zuppa dolci bevande vino casa pasta pizza antipasti primi secondi contorni funghi", chars: "àèéìòù" },
+  deu: { words: "der die das mit und vom von auf aus hähnchen rind schwein fisch käse kartoffeln salat suppe nachspeisen getränke wein haus tag vorspeisen hauptgerichte beilagen kaffee kuchen schokolade frühstück brötchen sahne strudel wurst bier brot heiße", chars: "äöüß" },
+  por: { words: "o a os as de do da com e ao frango carne porco peixe queijo batatas salada sopa sobremesas bebidas vinho casa arroz feijão", chars: "ãõçáéíóúâêô" },
+  nld: { words: "de het een met en van op kip rund varken vis kaas friet salade soep nagerechten dranken wijn huis", chars: "ëï" },
+  tur: { words: "ve ile tavuk et balık peynir patates salata çorba tatlılar içecekler ev kebap pilav", chars: "ıışğçöü" },
+  ind: { words: "dan dengan ayam sapi ikan nasi goreng mie sayur sambal minuman es teh kopi", chars: "" },
+  vie: { words: "và với gà bò heo cá cơm phở bún nước trà cà phê", chars: "ạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹđ" },
+  pol: { words: "z i w ze kurczak wołowina ryba ser ziemniaki sałatka zupa desery napoje wino", chars: "ąćęłńóśźż" },
+  ces: { words: "s a se kuře hovězí ryba sýr brambory salát polévka dezerty nápoje víno", chars: "ěščřžýáíéůú" },
+  swe: { words: "och med kyckling nötkött fisk ost potatis sallad soppa efterrätter drycker vin", chars: "åäö" },
+  ron: { words: "și cu pui vită pește brânză cartofi salată supă desert băuturi vin", chars: "ăâîșț" },
+  hun: { words: "és csirke marha hal sajt burgonya saláta leves desszert italok bor", chars: "őűáéíóöüú" },
+};
+
+/**
+ * Guess the language of Latin-script menu text so the matching OCR language
+ * can be added. Returns {code, score} or null when it looks like English or
+ * there is too little evidence.
+ */
+const stripAccents = text => text.normalize("NFD").replace(/\p{M}/gu, "").replace(/ß/g, "ss").replace(/œ/g, "oe");
+
+export function guessLatinLanguage(text) {
+  const lower = text.toLocaleLowerCase();
+  // OCR without the right language often drops accents ("Kasekuchen"), so words are compared without them.
+  const tokens = stripAccents(lower).split(/[^\p{L}]+/u).filter(Boolean);
+  if (tokens.length < 4) return null;
+  const english = new Set("the and with of in on our fresh served chicken beef fish cheese fries salad soup desserts drinks wine house day starters mains sides".split(" "));
+  const englishHits = tokens.filter(t => english.has(t)).length;
+  let best = null;
+  for (const [code, hint] of Object.entries(LATIN_HINTS)) {
+    const words = new Set(stripAccents(hint.words).split(" "));
+    const wordHits = tokens.filter(t => words.has(t)).length;
+    const charHits = [...lower].filter(ch => hint.chars.includes(ch)).length;
+    const score = wordHits + Math.min(charHits, tokens.length) * 0.5;
+    if (!best || score > best.score) best = { code, score };
+  }
+  if (!best || best.score < Math.max(2, englishHits * 1.2)) return null;
+  return best;
 }
 
 // ---------------------------------------------------------------- spreadsheets

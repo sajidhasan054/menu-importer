@@ -22,17 +22,45 @@ https://<your-github-username>.github.io/menu-importer/
    Chinese, Japanese, Korean, Thai, French, Spanish and 30 more). Each language
    downloads once and is then cached by the browser.
 2. **Check what was read.** Each photo or page shows the image next to the
-   recognized text. The text is editable: fix mistakes and select
-   **Update items**. A line starting with `#` becomes a section heading. Use
-   **Rotate**, **Invert colors** (light text on a dark menu) or **Read again**
-   if a photo comes out badly. For spreadsheets, choose what each column holds;
-   columns marked *Price for size* become one row per size.
+   recognized text, the languages used and how certain the reader was. The
+   text is editable: fix mistakes and select **Update items**. A line starting
+   with `#` becomes a section heading. For a menu full of pictures, use
+   **Select areas** and drag boxes around the text to read; everything else is
+   ignored. **Rotate**, **Invert colors** (light text on a dark menu) and
+   **Read again** are there too. For spreadsheets, choose what each column
+   holds; columns marked *Price for size* become one row per size.
 3. **Edit the items** in the table. Rows missing a name or price are
    highlighted. Add, duplicate (for another size) or delete rows.
 4. **Download** a CSV or Excel file, or copy the table into Google Sheets.
 
 Your table is kept in the browser between visits until you select
 **Start over**.
+
+### How photos are read
+
+1. **Language and orientation.** The page's script (Latin, Arabic, Bangla,
+   Chinese, Devanagari, Thai…) and orientation are detected, so sideways
+   photos are turned upright and the right language is loaded. For
+   Latin-script menus a quick first read spots French, Spanish, German,
+   Italian, Portuguese, Turkish, Dutch and others, and adds that language so
+   accents (é, ñ, ü, ç) come out right. Ticking the languages yourself under
+   **Menu languages** is faster and the most reliable.
+2. **Image cleanup.** The photo is straightened, converted to grayscale with
+   stretched contrast, and inverted for light text on a dark background.
+   **Strong** cleanup also evens out shadows and flattens patterned paper and
+   pictures.
+3. **Text size.** The size of the letters is measured and the image is scaled
+   to the size the text reader handles best.
+4. **Two reading passes.** One pass finds text scattered across the page
+   (prices far from their names); the other reads whole lines. Their words are
+   merged, so each catches what the other misses.
+5. **Noise removal and layout.** Words from pictures and ornaments, and words
+   below the **Skip unclear text** level, are dropped. Columns are detected,
+   prices are kept with their items, Arabic, Persian, Urdu and Hebrew are read
+   right to left, and large text becomes section headings.
+
+**More reading settings** lets you change the image cleanup, the unclear-text
+level, text enlarging, the layout mode and automatic straightening.
 
 ### What the reader understands
 
@@ -87,6 +115,16 @@ Then open http://localhost:8080. (Opening `index.html` directly from disk does
 not work, because browsers block the text recognition worker on `file://`.)
 
 Run the parser tests with `npm test`.
+
+### Quality checks
+
+`qa/` holds a set of test menus in English, French, Spanish, German, Arabic,
+Bangla and Chinese, rendered as photo-like images (tilted, blurred, shadowed,
+grainy, with pictures and ornaments, one sideways). `node qa/run.cjs` runs them
+through the built tool in a real browser and reports how many items and prices
+were found. It needs Playwright with Chromium (`npx playwright install
+chromium`). Add `--manual` to test with the right languages ticked instead of
+automatic detection.
 
 ## Optional: Python server and command line
 

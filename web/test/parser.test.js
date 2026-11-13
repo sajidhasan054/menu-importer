@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  guessColumns, layoutText, looksLikeTable, normalizeDigits, parseAmount, parseLine, parseMenuText, tableToRows, toCSV,
+  guessColumns, guessLatinLanguage, isRightToLeft, layoutText, mergeWordSets, looksLikeTable, normalizeDigits, parseAmount, parseLine, parseMenuText, tableToRows, toCSV,
 } from "../parser.js";
 
 const simple = rows => rows.map(r => [r.section, r.name, r.portion, r.price, r.currency]);
@@ -23,6 +23,7 @@ test("line prices, portions and currencies", () => {
     ["Chicken 65   250", "INR", "Chicken 65", [["250", "INR", null]]],
     ["Fruit Salad $13", "CAD", "Fruit Salad", [["13", "CAD", null]]],
     ["Latte   S 3.5   L 4.5", "USD", "Latte", [["3.50", "USD", "S"], ["4.50", "USD", "L"]]],
+    ["Cappuccino   3:50 €", "USD", "Cappuccino", [["3.50", "EUR", null]]],
   ];
   for (const [line, currency, name, prices] of cases) {
     const parsed = parseLine(line, currency);
@@ -117,4 +118,52 @@ test("pasted CSV detection and CSV export escaping", () => {
   assert.equal(looksLikeTable("Tea 40\nCoffee 80"), false);
   const csv = toCSV([{ name: "=HYPERLINK()", price: "4", description: 'a "b", c' }], ["name", "price", "description"]);
   assert.equal(csv, '﻿name,price,description\r\n\'=HYPERLINK(),4,"a ""b"", c"\r\n');
+});
+
+test("Arabic menu photo is read right to left, with prices on the left", () => {
+  const word = (text, x0, y0, w = 60, h = 24) => ({ text, x0, y0, x1: x0 + w, y1: y0 + h, conf: 90 });
+  const words = [
+    word("مقبلات", 600, 40, 120, 34),
+    word("حمص", 640, 100, 80), word("بالطحينة", 520, 100, 100), word("١٥", 60, 100, 30),
+    word("فتوش", 640, 140, 80), word("٢٠", 60, 140, 30),
+    word("مشروبات", 600, 200, 120, 34),
+    word("شاي", 640, 260, 80), word("٥", 60, 260, 20),
+    word("قهوة", 640, 300, 80), word("٨", 60, 300, 20),
+  ];
+  const text = layoutText(words);
+  assert.match(text, /^# مقبلات\nحمص بالطحينة   ١٥/);
+  const { rows } = parseMenuText(text, { defaultCurrency: "SAR" });
+  assert.deepEqual(rows.map(r => [r.section, r.name, r.price]), [
+    ["مقبلات", "حمص بالطحينة", "15"], ["مقبلات", "فتوش", "20"], ["مشروبات", "شاي", "5"], ["مشروبات", "قهوة", "8"],
+  ]);
+  assert.ok(isRightToLeft("حمص بالطحينة 15"));
+  assert.ok(!isRightToLeft("Hummus 15"));
+});
+
+test("OCR noise from pictures and ornaments is dropped", () => {
+  const word = (text, x0, y0, conf = 92, w = text.length * 12, h = 22) => ({ text, x0, y0, x1: x0 + w, y1: y0 + h, conf });
+  const words = [
+    word("Burger", 40, 40), word("9.50", 400, 40),
+    word("|||", 40, 80, 30), word("~~", 90, 80, 25), word("é1", 130, 80, 20),   // photo texture
+    word("wd", 40, 120, 30), word("Ka", 90, 120, 35),                        // low-confidence fragments
+    word("@", 300, 160, 20, 300, 200),                                        // big picture blob
+    word("Fries", 40, 400), word("3.00", 400, 400),
+  ];
+  const text = layoutText(words);
+  assert.equal(text, "Burger   9.50\nFries   3.00");
+});
+
+test("guess the language of Latin-script menus", () => {
+  assert.equal(guessLatinLanguage("Soupe à l'oignon gratinée. Poulet rôti, frites maison. Crème brûlée")?.code, "fra");
+  assert.equal(guessLatinLanguage("Tortilla española con jamón. Pollo al ajillo. Ensalada de la casa")?.code, "spa");
+  assert.equal(guessLatinLanguage("Schnitzel mit Kartoffelsalat und Gurken. Käse Spätzle")?.code, "deu");
+  assert.equal(guessLatinLanguage("Grilled chicken with fresh salad and fries. Soup of the day"), null);
+});
+
+test("words from two OCR passes are merged without duplicates", () => {
+  const w = (text, x0, conf) => ({ text, x0, y0: 10, x1: x0 + 60, y1: 40, conf });
+  const sparse = [w("Burger", 0, 95), w("9.50", 400, 96), w("Sal", 0 + 1000, 40), w("ad", 1050, 42)];
+  const page = [w("Burger", 2, 93), { ...w("Salad", 1000, 90), x1: 1110 }, { ...w("Fries", 0, 91), y0: 60, y1: 90 }];
+  const merged = mergeWordSets(sparse, page).map(x => x.text).sort();
+  assert.deepEqual(merged, ["9.50", "Burger", "Fries", "Salad"]);
 });
