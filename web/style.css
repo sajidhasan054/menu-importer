@@ -62,7 +62,21 @@ details { min-width: 0; }
 .source.table-source { grid-template-columns: minmax(0, 1fr); }
 .source h3 { margin: 0 0 6px; font-size: 1rem; overflow-wrap: anywhere; }
 .preview { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); align-self: start; }
+.preview { position: relative; }
 .preview img, .preview canvas { display: block; width: 100%; height: auto; }
+.preview-image { position: relative; }
+.preview .regions { position: absolute; inset: 0; pointer-events: none; }
+.source.selecting .preview .regions { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.region { position: absolute; border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--surface); font-size: .75rem; font-weight: 700; }
+.region { display: flex; align-items: flex-start; justify-content: flex-start; padding: 0 3px; text-shadow: 0 0 2px #000; }
+.select-hint { margin: 0; padding: 6px 8px; font-size: .85rem; color: var(--text); background: var(--accent-soft); }
+.source.selecting { grid-template-columns: minmax(0, 1fr); }
+.source.selecting .preview { max-width: 900px; }
+.read-info { margin: 0 0 6px; }
+.read-info.warn { color: var(--warn); background: var(--warn-soft); padding: 4px 8px; border-radius: 6px; }
+.advanced { margin-top: 12px; }
+.advanced .options { margin-top: 8px; }
+input[type=range] { padding: 0; }
 .preview .zoom { display: block; }
 .source textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono", monospace; font-size: .88rem; min-height: 220px; }
 .source .actions { margin-top: 8px; }

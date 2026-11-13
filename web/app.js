@@ -1,5 +1,6 @@
 import {
-  COLUMNS, COLUMN_LABELS, guessColumns, layoutText, looksLikeTable, parseAmount, parseMenuText,
+  COLUMNS, COLUMN_LABELS, SCRIPT_LANGUAGES, guessColumns, guessLatinLanguage, isRightToLeft, layoutText,
+  looksLikeTable, mergeWordSets, parseAmount, parseMenuText,
   tableToRows, toCSV,
 } from "./parser.js";
 
@@ -34,6 +35,11 @@ function loadSettings() {
     langs: stored.settings?.langs || ["eng"],
     currency: stored.settings?.currency || byRegion[region] || (euro.includes(region) ? "EUR" : "USD"),
     layout: stored.settings?.layout || "auto",
+    autoLang: stored.settings?.autoLang ?? true,
+    autoRotate: stored.settings?.autoRotate ?? true,
+    cleanup: stored.settings?.cleanup || "auto",
+    minConfidence: stored.settings?.minConfidence ?? 40,
+    upscale: stored.settings?.upscale || "auto",
   };
 }
 
@@ -85,8 +91,25 @@ async function setupOptions() {
     if (/^[A-Z]{3}$/.test(value)) { settings.currency = value; save(); }
     $("currency").value = settings.currency;
   });
-  $("layout").value = settings.layout;
-  $("layout").addEventListener("change", () => { settings.layout = $("layout").value; save(); });
+  const bind = (id, key, read = el => el.value) => {
+    const el = $(id);
+    if (el.type === "checkbox") el.checked = settings[key]; else el.value = settings[key];
+    const update = () => { settings[key] = read(el); save(); refreshSettingLabels(); };
+    el.addEventListener("change", update);
+    el.addEventListener("input", update);
+  };
+  bind("layout", "layout");
+  bind("auto-lang", "autoLang", el => el.checked);
+  bind("auto-rotate", "autoRotate", el => el.checked);
+  bind("cleanup", "cleanup");
+  bind("upscale", "upscale");
+  bind("min-conf", "minConfidence", el => Number(el.value));
+  refreshSettingLabels();
+}
+
+function refreshSettingLabels() {
+  const value = settings.minConfidence;
+  $("min-conf-value").textContent = value === 0 ? "off" : value <= 30 ? `low (${value})` : value <= 55 ? `normal (${value})` : `strict (${value})`;
 }
 
 function updateLanguageSummary() {
@@ -278,18 +301,22 @@ async function addImageSource(title, image) {
 
 let worker = null;
 let workerKey = "";
+let detector = null;
 let progressTarget = null;
+const siteBase = () => new URL(".", location.href).href;
+const languageName = code => Object.fromEntries(languages)[code] || code;
+const available = code => languages.some(([c]) => c === code);
 
-async function getWorker() {
-  const key = settings.langs.join("+");
+async function getWorker(langs) {
+  const key = langs.join("+");
   if (worker && workerKey === key) return worker;
   if (worker) await worker.terminate();
-  const base = new URL(".", location.href).href;
-  status(`Loading text recognition for ${$("language-summary").textContent}… The first time takes a moment.`);
-  worker = await Tesseract.createWorker(settings.langs, 1, {
-    workerPath: base + "vendor/tesseract/worker.min.js",
-    corePath: base + "vendor/tesseract-core",
-    langPath: base + "lang",
+  worker = null;
+  status(`Loading text recognition for ${langs.map(languageName).join(", ")}… The first time takes a moment.`);
+  worker = await Tesseract.createWorker(langs, 1, {
+    workerPath: siteBase() + "vendor/tesseract/worker.min.js",
+    corePath: siteBase() + "vendor/tesseract-core",
+    langPath: siteBase() + "lang",
     logger: message => {
       if (progressTarget && message.status === "recognizing text") progressTarget.style.width = `${Math.round(message.progress * 100)}%`;
     },
@@ -298,17 +325,36 @@ async function getWorker() {
   return worker;
 }
 
-/** Draw the image upright, large enough for OCR, in grayscale with stretched contrast. */
-function prepareImage(source) {
+async function getDetector() {
+  detector ||= await Tesseract.createWorker("osd", 0, {
+    workerPath: siteBase() + "vendor/tesseract/worker.min.js",
+    corePath: siteBase() + "vendor/tesseract-core",
+    langPath: siteBase() + "lang/legacy",
+    legacyCore: true,
+    legacyLang: true,
+  });
+  return detector;
+}
+
+/** Draw the image upright and at a size that suits OCR. */
+function drawUpright(source, maxLong = null, textScale = 1) {
   const { image, rotation } = source;
   const w = image.width, h = image.height;
-  const long = Math.max(w, h), short = Math.min(w, h);
-  let scale = Math.min(1, 3200 / long);
-  if (short * scale < 1400) scale = Math.min(3200 / long, 1400 / short, 3);
+  const long = Math.max(w, h);
+  let scale;
+  if (maxLong) scale = Math.min(1, maxLong / long);
+  else if (settings.upscale === "2") scale = Math.min(2, 4000 / long);
+  else if (settings.upscale === "1") scale = Math.min(1, 3200 / long);
+  else {
+    // Start near the original size (small images doubled); the text size is
+    // measured after a first read and the image rescaled to suit OCR.
+    scale = long < 1000 ? 2 : Math.min(1, 3200 / long);
+    scale = Math.min(scale * textScale, 4000 / long);
+  }
   const sideways = rotation % 180 !== 0;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round((sideways ? h : w) * scale);
-  canvas.height = Math.round((sideways ? w : h) * scale);
+  canvas.width = Math.max(1, Math.round((sideways ? h : w) * scale));
+  canvas.height = Math.max(1, Math.round((sideways ? w : h) * scale));
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -316,32 +362,181 @@ function prepareImage(source) {
   ctx.rotate((rotation * Math.PI) / 180);
   ctx.drawImage(image, (-w * scale) / 2, (-h * scale) / 2, w * scale, h * scale);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return canvas;
+}
 
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+/**
+ * Clean the image for OCR.
+ * normal: grayscale, stretched contrast, inverted when the menu is light-on-dark.
+ * strong: also an adaptive threshold, which evens out shadows and flattens
+ *         patterned backgrounds and pictures.
+ * off:    the photo as it is (still inverted if the user asked).
+ */
+function enhance(canvas, source) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const width = canvas.width, height = canvas.height;
+  const data = ctx.getImageData(0, 0, width, height);
   const px = data.data;
+  const count = width * height;
+  const gray = new Uint8ClampedArray(count);
   const histogram = new Uint32Array(256);
   let sum = 0;
-  for (let i = 0; i < px.length; i += 4) {
-    const y = Math.round(0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]);
-    px[i] = y;
+  for (let i = 0, j = 0; j < count; i += 4, j++) {
+    const y = (0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]) | 0;
+    gray[j] = y;
     histogram[y]++;
     sum += y;
   }
-  const count = px.length / 4;
-  const invert = source.invert ?? sum / count < 110; // light text on a dark menu
+  const invert = source.invert ?? (settings.cleanup !== "off" && sum / count < 110);
+  source.autoInverted = invert;
+  if (settings.cleanup === "off") {
+    if (invert) {
+      for (let i = 0; i < px.length; i += 4) { px[i] = 255 - px[i]; px[i + 1] = 255 - px[i + 1]; px[i + 2] = 255 - px[i + 2]; }
+      ctx.putImageData(data, 0, 0);
+    }
+    return canvas;
+  }
   let low = 0, high = 255, seen = 0;
   for (let v = 0; v < 256; v++) { seen += histogram[v]; if (seen > count * 0.01) { low = v; break; } }
   seen = 0;
   for (let v = 255; v >= 0; v--) { seen += histogram[v]; if (seen > count * 0.01) { high = v; break; } }
   const range = Math.max(1, high - low);
-  for (let i = 0; i < px.length; i += 4) {
-    let y = Math.min(255, Math.max(0, ((px[i] - low) * 255) / range));
-    if (invert) y = 255 - y;
-    px[i] = px[i + 1] = px[i + 2] = y;
+  for (let j = 0; j < count; j++) {
+    let y = Math.min(255, Math.max(0, ((gray[j] - low) * 255) / range));
+    gray[j] = invert ? 255 - y : y;
   }
+  if (settings.cleanup === "strong") adaptiveThreshold(gray, width, height);
+  for (let i = 0, j = 0; j < count; i += 4, j++) px[i] = px[i + 1] = px[i + 2] = gray[j];
   ctx.putImageData(data, 0, 0);
-  source.autoInverted = invert;
   return canvas;
+}
+
+/** Bradley adaptive threshold: a pixel is ink when it is darker than its neighbourhood. */
+function adaptiveThreshold(gray, width, height) {
+  const integral = new Float64Array((width + 1) * (height + 1));
+  for (let y = 0; y < height; y++) {
+    let row = 0;
+    for (let x = 0; x < width; x++) {
+      row += gray[y * width + x];
+      integral[(y + 1) * (width + 1) + x + 1] = integral[y * (width + 1) + x + 1] + row;
+    }
+  }
+  const half = Math.max(8, Math.round(Math.max(width, height) / 32));
+  const out = new Uint8ClampedArray(gray.length);
+  for (let y = 0; y < height; y++) {
+    const y0 = Math.max(0, y - half), y1 = Math.min(height - 1, y + half);
+    for (let x = 0; x < width; x++) {
+      const x0 = Math.max(0, x - half), x1 = Math.min(width - 1, x + half);
+      const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const total = integral[(y1 + 1) * (width + 1) + x1 + 1] - integral[y0 * (width + 1) + x1 + 1]
+        - integral[(y1 + 1) * (width + 1) + x0] + integral[y0 * (width + 1) + x0];
+      out[y * width + x] = gray[y * width + x] * area < total * 0.85 ? 0 : 255;
+    }
+  }
+  gray.set(out);
+}
+
+/** Find the script (Arabic, Bengali, Han…) and how far the photo is turned. */
+async function detectPage(source) {
+  try {
+    // Menus have little text, so the page is tiled 2×2 to give the detector enough to work with.
+    const small = enhance(drawUpright(source, 1000), { invert: null });
+    const tiled = document.createElement("canvas");
+    tiled.width = small.width * 2;
+    tiled.height = small.height * 2;
+    const ctx = tiled.getContext("2d");
+    for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]]) ctx.drawImage(small, x * small.width, y * small.height);
+    const { data } = await (await getDetector()).detect(tiled);
+    return data;
+  } catch {
+    return null; // detection is a bonus; OCR still runs with the chosen languages
+  }
+}
+
+function crop(canvas, region) {
+  const x = Math.round(region.x * canvas.width), y = Math.round(region.y * canvas.height);
+  const w = Math.max(1, Math.round(region.w * canvas.width)), h = Math.max(1, Math.round(region.h * canvas.height));
+  const out = document.createElement("canvas");
+  out.width = w + 40;
+  out.height = h + 40;
+  const ctx = out.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(canvas, x, y, w, h, 20, 20, w, h);
+  return out;
+}
+
+/** One OCR pass. Returns positioned words and the deskew angle used. */
+async function ocrPass(canvas, langs, psm, rotateRadians) {
+  const ocr = await getWorker(langs);
+  await ocr.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: "1" });
+  const options = rotateRadians === undefined ? { rotateAuto: settings.autoRotate } : { rotateRadians };
+  const { data } = await ocr.recognize(canvas, options, { blocks: true, text: true });
+  const words = [];
+  for (const block of data.blocks || []) {
+    for (const paragraph of block.paragraphs) {
+      for (const line of paragraph.lines) {
+        for (const word of line.words) words.push({ text: word.text, conf: word.confidence, ...word.bbox });
+      }
+    }
+  }
+  return { words, text: data.text || "", rotateRadians: data.rotateRadians || 0 };
+}
+
+/**
+ * Read one image. Sparse-text mode finds prices far from their names but
+ * skips some words; page mode is the opposite. Both run (unless "quick") and
+ * their words are merged, then laid out into lines and columns.
+ */
+async function ocrText(canvas, langs, { quick = false, cache = new Map(), pageLangs = langs } = {}) {
+  const passes = settings.layout === "page" ? ["3"] : quick ? ["11"] : ["11", "3"];
+  let words = null, fallback = "", angle;
+  for (const psm of passes) {
+    // For Arabic, Chinese and other non-Latin scripts the page pass runs
+    // without English, which reads their words better; the sparse pass keeps
+    // English for digits and currency codes.
+    const passLangs = psm === "3" ? pageLangs : langs;
+    const key = `${passLangs.join("+")}|${psm}`;
+    if (!cache.has(key)) cache.set(key, await ocrPass(canvas, passLangs, psm, angle));
+    const pass = cache.get(key);
+    angle ??= pass.rotateRadians;
+    words = words ? mergeWordSets(words, pass.words) : pass.words;
+    fallback ||= pass.text;
+  }
+  window.lastOcrWords = words; // for debugging and QA
+  const text = words.length
+    ? layoutText(fixTakaSign(words, langs), { splitColumns: settings.layout !== "single", minConfidence: settings.minConfidence })
+    : fallback;
+  const kept = words.filter(w => w.conf >= settings.minConfidence);
+  const confidence = kept.length ? Math.round(kept.reduce((n, w) => n + w.conf, 0) / kept.length) : 0;
+  const heights = words.filter(w => w.conf >= 60 && w.text.length > 1).map(w => w.y1 - w.y0).sort((a, b) => a - b);
+  return { text, confidence, textHeight: heights.length ? heights[Math.floor(heights.length / 2)] : 0 };
+}
+
+/**
+ * Tesseract often reads the taka sign ৳ as the Bangla digit ৮ (8). When most
+ * prices on a Bangla page start with ৮, read that ৮ as ৳.
+ */
+function fixTakaSign(words, langs) {
+  if (!langs.includes("ben")) return words;
+  const prices = words.filter(w => /^[৳৮]?[০-৯]{2,}/u.test(w.text));
+  const suspicious = prices.filter(w => /^৮[০-৯]{2,}/u.test(w.text));
+  if (prices.length < 3 || suspicious.length / prices.length < 0.5) return words;
+  return words.map(w => (/^৮[০-৯]{2,}/u.test(w.text) ? { ...w, text: "৳" + w.text.slice(1) } : w));
+}
+
+async function readCanvas(canvas, regions, langs, options = {}) {
+  const caches = (options.caches ||= []);
+  const shared = { quick: options.quick, pageLangs: options.pageLangs || langs };
+  if (!regions?.length) return ocrText(canvas, langs, { ...shared, cache: (caches[0] ||= new Map()) });
+  const parts = [];
+  for (const [i, region] of regions.entries()) {
+    parts.push(await ocrText(crop(canvas, region), langs, { ...shared, cache: (caches[i] ||= new Map()) }));
+  }
+  return {
+    text: parts.map(p => p.text).filter(Boolean).join("\n\n"),
+    confidence: Math.round(parts.reduce((n, p) => n + p.confidence, 0) / parts.length),
+  };
 }
 
 async function recognize(source) {
@@ -350,26 +545,69 @@ async function recognize(source) {
   view.querySelector(".progress").hidden = false;
   view.querySelectorAll("button").forEach(b => { b.disabled = true; });
   bar.style.width = "0%";
+  const notes = [];
   try {
-    const canvas = prepareImage(source);
-    view.querySelector(".preview").replaceChildren(previewElement(canvas));
-    const ocr = await getWorker();
-    status(`Reading ${source.title}…`);
-    progressTarget = bar;
-    await ocr.setParameters({ tessedit_pageseg_mode: settings.layout === "single" ? "6" : "3", preserve_interword_spaces: "1" });
-    const { data } = await ocr.recognize(canvas, {}, { blocks: true, text: true });
-    const words = [];
-    for (const block of data.blocks || []) {
-      for (const paragraph of block.paragraphs) {
-        for (const line of paragraph.lines) {
-          for (const word of line.words) {
-            words.push({ text: word.text, conf: word.confidence, ...word.bbox });
-          }
+    let langs = [...settings.langs];
+    let pageLangs = null;
+    if (settings.autoRotate || settings.autoLang) {
+      status(`Checking the language and orientation of ${source.title}…`);
+      const found = await detectPage(source);
+      if (found) {
+        if (settings.autoRotate && !source.manualRotation && found.orientation_degrees && found.orientation_confidence >= 2) {
+          source.rotation = (source.rotation + found.orientation_degrees) % 360;
+          source.regions = [];
+          notes.push(`turned ${found.orientation_degrees}°`);
+        }
+        const scriptLangs = (SCRIPT_LANGUAGES[found.script] || []).filter(available);
+        if (settings.autoLang && found.script && found.script !== "Latin" && scriptLangs.length && found.script_confidence >= 0.5) {
+          const scriptOnly = [...new Set([...scriptLangs.slice(0, 1), ...langs.filter(code => scriptLangs.includes(code))])];
+          langs = [...scriptOnly, "eng"];
+          pageLangs = scriptOnly;
+          notes.push(`${found.script} script found`);
         }
       }
     }
-    source.text = words.length ? layoutText(words, { splitColumns: settings.layout === "auto" }) : data.text;
+    let canvas = enhance(drawUpright(source), source);
+    status(`Reading ${source.title}…`);
+    progressTarget = bar;
+    let caches = [];
+    // A quick first read measures the text size and spots the language.
+    let first = await readCanvas(canvas, source.regions, langs, { quick: true, caches });
+    // Tesseract reads best when letters are about 25–40 px tall.
+    // Chinese, Japanese and Korean characters need more pixels than letters.
+    const dense = langs.some(code => ["chi_sim", "chi_tra", "jpn", "kor"].includes(code));
+    const [minHeight, target, maxHeight] = dense ? [40, 56, 90] : [18, 34, 60];
+    if (settings.upscale === "auto" && !source.regions?.length && first.textHeight
+        && (first.textHeight > maxHeight || first.textHeight < minHeight)) {
+      const factor = Math.min(3, Math.max(0.35, target / first.textHeight));
+      canvas = enhance(drawUpright(source, null, factor), source);
+      caches = [];
+      first = await readCanvas(canvas, source.regions, langs, { quick: true, caches });
+      notes.push(factor > 1 ? "enlarged small text" : "reduced large text");
+    }
+    const imageBox = view.querySelector(".preview-image");
+    imageBox.querySelector(".zoom")?.remove();
+    imageBox.prepend(previewElement(canvas));
+    drawRegions(source);
+    // Latin-script menus: spot French, Spanish, German… and use that language too.
+    if (settings.autoLang && langs.every(code => !["ara", "fas", "urd", "heb"].includes(code))) {
+      const guess = isRightToLeft(first.text) ? null : guessLatinLanguage(first.text);
+      if (guess && !langs.includes(guess.code) && available(guess.code)) {
+        status(`${source.title} looks ${languageName(guess.code)}. Reading with ${languageName(guess.code)}…`);
+        langs = [...langs, guess.code];
+        notes.push(`looks ${languageName(guess.code)}`);
+      }
+    }
+    status(`Reading ${source.title}…`);
+    const result = await readCanvas(canvas, source.regions, langs, { caches, pageLangs: pageLangs || langs });
+    source.text = result.text;
+    source.langs = langs;
     view.querySelector("textarea").value = source.text;
+    const info = view.querySelector(".read-info");
+    const low = result.confidence < 60;
+    info.textContent = `Read as ${langs.map(languageName).join(" + ")}${notes.length ? ` · ${notes.join(" · ")}` : ""} · certainty ${result.confidence}%`
+      + (low ? ". Hard to read: try Select areas, Strong image cleanup, or tick the right language and Read again." : "");
+    info.classList.toggle("warn", low);
     applySource(source);
     status(`${source.title}: done. Check the text and the items below.`);
   } catch (error) {
@@ -379,6 +617,69 @@ async function recognize(source) {
     view.querySelector(".progress").hidden = true;
     view.querySelectorAll("button").forEach(b => { b.disabled = false; });
   }
+}
+
+// ------------------------------------------------------------------ area selection
+
+function drawRegions(source) {
+  const layer = source.view?.querySelector(".regions");
+  if (!layer) return;
+  layer.replaceChildren(...(source.regions || []).map((r, i) => {
+    const box = document.createElement("div");
+    box.className = "region";
+    Object.assign(box.style, { left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
+    box.textContent = String(i + 1);
+    return box;
+  }));
+}
+
+function enableSelection(source, layer) {
+  let start = null, box = null;
+  const point = event => {
+    const rect = layer.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+    };
+  };
+  layer.addEventListener("pointerdown", event => {
+    if (!source.selecting) return;
+    event.preventDefault();
+    layer.setPointerCapture(event.pointerId);
+    start = point(event);
+    box = document.createElement("div");
+    box.className = "region drawing";
+    layer.append(box);
+  });
+  layer.addEventListener("pointermove", event => {
+    if (!start) return;
+    const p = point(event);
+    Object.assign(box.style, {
+      left: `${Math.min(p.x, start.x) * 100}%`, top: `${Math.min(p.y, start.y) * 100}%`,
+      width: `${Math.abs(p.x - start.x) * 100}%`, height: `${Math.abs(p.y - start.y) * 100}%`,
+    });
+  });
+  layer.addEventListener("pointerup", event => {
+    if (!start) return;
+    const p = point(event);
+    const region = { x: Math.min(p.x, start.x), y: Math.min(p.y, start.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y) };
+    start = null;
+    if (region.w > 0.02 && region.h > 0.01) (source.regions ||= []).push(region);
+    drawRegions(source);
+    updateSelectionButtons(source);
+  });
+}
+
+function updateSelectionButtons(source) {
+  const view = source.view;
+  const count = source.regions?.length || 0;
+  view.classList.toggle("selecting", Boolean(source.selecting));
+  const select = view.querySelector('[data-action="select"]');
+  if (select) select.textContent = source.selecting ? (count ? `Read ${count} selected area${count > 1 ? "s" : ""}` : "Cancel selecting") : "Select areas";
+  const clear = view.querySelector('[data-action="clear-areas"]');
+  if (clear) clear.hidden = !count;
+  const hint = view.querySelector(".select-hint");
+  if (hint) hint.hidden = !source.selecting;
 }
 
 function previewElement(canvasOrBitmap) {
@@ -435,8 +736,21 @@ function renderSource(source) {
   } else {
     const preview = document.createElement("div");
     preview.className = "preview";
-    if (source.kind === "image") preview.append(previewElement(source.image));
-    else if (source.preview) preview.append(previewElement(source.preview));
+    const imageBox = document.createElement("div");
+    imageBox.className = "preview-image";
+    preview.append(imageBox);
+    if (source.kind === "image") {
+      imageBox.append(previewElement(source.image));
+      const layer = document.createElement("div");
+      layer.className = "regions";
+      imageBox.append(layer);
+      enableSelection(source, layer);
+      const hint = document.createElement("p");
+      hint.className = "select-hint";
+      hint.hidden = true;
+      hint.textContent = "Drag boxes around the text to read, in reading order. Pictures outside the boxes are ignored.";
+      preview.append(hint);
+    } else if (source.preview) imageBox.append(previewElement(source.preview));
     else preview.hidden = true;
     const body = document.createElement("div");
     const title = document.createElement("h3");
@@ -457,27 +771,47 @@ function renderSource(source) {
       note.textContent = source.note;
       body.append(note);
     }
-    body.append(progress, textarea, sourceActions(source), unmatchedList(source));
+    const info = document.createElement("p");
+    info.className = "help read-info";
+    body.append(progress, info, textarea, sourceActions(source), unmatchedList(source));
     card.append(preview, body);
     if (preview.hidden) card.style.gridTemplateColumns = "minmax(0, 1fr)";
   }
   if (!card.isConnected) $("sources").append(card);
+  if (source.kind === "image") { drawRegions(source); updateSelectionButtons(source); }
 }
 
 function sourceActions(source) {
   const actions = document.createElement("div");
   actions.className = "actions";
-  const add = (label, handler, kind = "secondary") => {
+  const add = (label, handler, kind = "secondary", action = "") => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = kind;
+    if (action) button.dataset.action = action;
     button.textContent = label;
     button.addEventListener("click", handler);
     actions.append(button);
   };
   add("Update items", () => applySource(source, true), "");
   if (source.kind === "image") {
-    add("Rotate", () => { source.rotation = (source.rotation + 90) % 360; recognize(source); });
+    add("Select areas", () => {
+      if (source.selecting && source.regions?.length) {
+        source.selecting = false;
+        updateSelectionButtons(source);
+        recognize(source);
+        return;
+      }
+      source.selecting = !source.selecting;
+      updateSelectionButtons(source);
+    }, "secondary", "select");
+    add("Clear areas", () => { source.regions = []; drawRegions(source); updateSelectionButtons(source); recognize(source); }, "secondary", "clear-areas");
+    add("Rotate", () => {
+      source.rotation = (source.rotation + 90) % 360;
+      source.manualRotation = true;
+      source.regions = [];
+      recognize(source);
+    });
     add("Invert colors", () => { source.invert = !source.autoInverted; recognize(source); });
     add("Read again", () => recognize(source));
   }

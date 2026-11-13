@@ -5,8 +5,9 @@
   "description": "Free in-browser menu to CSV converter",
   "scripts": {
     "build": "node scripts/build-site.mjs",
-    "test": "node --test web/test/*.test.js",
-    "serve": "python3 -m http.server 8080 --directory _site"
+    "test": "node --check web/app.js && node --test web/test/*.test.js",
+    "serve": "python3 -m http.server 8080 --directory _site",
+    "qa": "node qa/run.cjs"
   },
   "dependencies": {
     "@tesseract.js-data/ara": "1.0.0",
@@ -33,6 +34,7 @@
     "@tesseract.js-data/msa": "1.0.0",
     "@tesseract.js-data/nep": "1.0.0",
     "@tesseract.js-data/nld": "1.0.0",
+    "@tesseract.js-data/osd": "1.0.0",
     "@tesseract.js-data/pan": "1.0.0",
     "@tesseract.js-data/pol": "1.0.0",
     "@tesseract.js-data/por": "1.0.0",
@@ -53,5 +55,13 @@
     "tesseract.js": "7.0.0",
     "tesseract.js-core": "7.0.0",
     "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@fontsource/dancing-script": "^5.3.0",
+    "@fontsource/noto-naskh-arabic": "^5.3.0",
+    "@fontsource/noto-sans-bengali": "^5.3.0",
+    "@fontsource/noto-sans-sc": "^5.3.1",
+    "@fontsource/noto-serif": "^5.3.0",
+    "@fontsource/playfair-display": "^5.3.0"
   }
 }
