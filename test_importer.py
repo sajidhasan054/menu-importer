@@ -1,8 +1,15 @@
 from decimal import Decimal
+import csv
+import io
 import unittest
 from pathlib import Path
+import zipfile
 
-from importer import parse_decimal_row, parse_line, read_csv
+from openpyxl import Workbook
+
+from export import menu_csv
+from importer import docx_text, parse_decimal_row, parse_line, read_csv, read_menu
+from schema import Menu
 
 
 class ImportTests(unittest.TestCase):
@@ -54,6 +61,67 @@ class ImportTests(unittest.TestCase):
         items, issues = read_csv(b"name,price\nTea,12abc\nCoffee,70\n", "BDT")
         self.assertEqual([item.name for item in items], ["Coffee"])
         self.assertIn("12abc", issues[0].raw_text)
+
+
+def workbook(rows, title="Menu"):
+    book = Workbook()
+    sheet = book.active
+    sheet.title = title
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+class TableTests(unittest.TestCase):
+    def test_excel_header_below_title_rows_and_multilingual_aliases(self):
+        data = workbook([
+            ["Café Lumière — Carte"], [],
+            ["Catégorie", "Nom", "Prix", "Description"],
+            ["Entrées", "Soupe à l'oignon", 8.5, "Gratinée"],
+            ["Entrées", "Escargots", 12, None],
+        ])
+        items, issues, info = read_menu(data, "carte.xlsx", "EUR")
+        self.assertEqual(info["method"], "table")
+        self.assertFalse(issues)
+        self.assertEqual([(i.section, i.name, i.variants[0].price_amount) for i in items],
+                         [("Entrées", "Soupe à l'oignon", Decimal("8.5")), ("Entrées", "Escargots", 12)])
+
+    def test_table_with_unknown_columns_keeps_what_it_can(self):
+        data = workbook([["Item", "Small", "Large"], ["Latte", 3.5, 4.5]])
+        items, _, info = read_menu(data, "drinks.xlsx", "USD")
+        self.assertEqual((info["method"], items[0].name), ("table", "Latte"))
+
+    def test_semicolon_csv_in_windows_encoding(self):
+        items, issues = read_csv("Plat;Preis\nGulasch;12\n".encode("cp1252"), "EUR")
+        self.assertEqual((items[0].name, items[0].variants[0].price_amount), ("Gulasch", 12))
+
+    def test_docx_tables_become_text(self):
+        body = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+                '<w:p><w:r><w:t>Desserts</w:t></w:r></w:p>'
+                '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Flan</w:t></w:r></w:p></w:tc>'
+                '<w:tc><w:p><w:r><w:t>5.00</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>')
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("word/document.xml", body)
+        self.assertEqual(docx_text(buffer.getvalue()), "Desserts\nFlan | 5.00")
+
+
+class TextTests(unittest.TestCase):
+    def test_text_file_uses_line_parser(self):
+        items, issues, info = read_menu(b"Tea - 40\n", "menu.txt", "BDT")
+        self.assertEqual((info["method"], items[0].name, items[0].variants[0].price_amount), ("text", "Tea", 40))
+
+
+class ExportTests(unittest.TestCase):
+    def test_csv_drops_empty_columns(self):
+        items, _ = read_csv(Path("examples/menu.csv").read_bytes(), "BDT")
+        menu = Menu(restaurant_name="R", branch_name="B", items=items)
+        rows = list(csv.reader(io.StringIO(menu_csv(menu).decode("utf-8-sig"))))
+        self.assertEqual(rows[0][:5], ["restaurant_name", "branch_name", "section", "name", "description"])
+        self.assertNotIn("name_en", rows[0])
+        self.assertEqual(len(rows), 5)
 
 
 if __name__ == "__main__":

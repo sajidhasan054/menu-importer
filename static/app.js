@@ -29,6 +29,7 @@ function field(container, target, key, label, choices) {
   input.value = target[key] ?? "";
   input.addEventListener("input", () => {
     target[key] = input.value.trim() || null;
+    if (key === "currency") target[key] = input.value.trim().toUpperCase() || menu.default_currency;
     if (key === "price_amount" && input.value.trim() && ["unknown", "market"].includes(target.price_type)) {
       target.price_type = "fixed";
       input.closest(".fields").querySelector("select").value = "fixed";
@@ -65,6 +66,7 @@ function render() {
     const card = document.createElement("article");
     const fields = fieldGroup(card);
     field(fields, item, "name", "Item");
+    field(fields, item, "name_en", "English name");
     field(fields, item, "section", "Section");
     field(fields, item, "description", "Description");
     for (const [index, variant] of item.variants.entries()) {
@@ -72,7 +74,8 @@ function render() {
       row.className = "variant";
       const group = fieldGroup(row);
       field(group, variant, "label", "Portion");
-      field(group, variant, "price_amount", "Price (" + variant.currency + ")");
+      field(group, variant, "price_amount", "Price");
+      field(group, variant, "currency", "Currency");
       field(group, variant, "price_type", "Price type", ["unknown", "fixed", "from", "market"]);
       field(group, variant, "pieces", "Pieces");
       field(group, variant, "weight_g", "Weight (g)");
@@ -101,7 +104,7 @@ upload.onsubmit = async event => {
   event.preventDefault();
   const submit = upload.querySelector("button");
   submit.disabled = true;
-  byId("status").textContent = "Reading menu files…";
+  byId("status").textContent = "Reading menu files… Photos and PDFs can take up to a minute per page.";
   try {
     const result = await request("/api/import", {method:"POST", body:new FormData(upload)});
     menu = result.draft;
@@ -118,7 +121,7 @@ upload.onsubmit = async event => {
     reviewStatus.textContent = "";
     issues.open = result.review_issues.length > 0 && menu.items.length === 0;
     byId("status").textContent = menu.items.length
-      ? menu.items.length + " items extracted. Check each portion and price before publishing."
+      ? menu.items.length + " items extracted. Check each portion and price, then download the CSV."
       : "No items could be extracted. Review the text below or try a clearer menu image.";
     render();
   } catch (error) {

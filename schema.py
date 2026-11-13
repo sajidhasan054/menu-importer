@@ -42,9 +42,11 @@ class Source(Record):
 
 class Item(Record):
     name: Name
+    name_en: str | None = None
     name_bn: str | None = None
     section: str | None = None
     description: str | None = None
+    description_en: str | None = None
     description_bn: str | None = None
     cuisine_tags: list[str] | None = None
     item_type: str | None = None
