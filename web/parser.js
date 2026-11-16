@@ -142,7 +142,7 @@ function trailingPrice(text) {
   const currencyToken = m.groups.pre || m.groups.post || null;
   const gap = before.match(/(\s*)$/)[1];
   const decimals = /[.,]\d{1,2}$/.test(m.groups.num);
-  const strong = Boolean(currencyToken || m.groups.dash || decimals || gap.length >= 2 || /[:–—\-|/]\s*$/.test(before));
+  let strong = Boolean(currencyToken || m.groups.dash || decimals || gap.length >= 2 || /[:–—\-|/]\s*$/.test(before));
   const weak = !strong && m.groups.num.replace(/\D/g, "").length < 2;
   let rest = before;
   let portion = null;
@@ -157,6 +157,8 @@ function trailingPrice(text) {
         && (sizeMatch[1].length >= 2 || /^\p{Lu}{1,2}$/u.test(sizeMatch[2]))) {
       portion = sizeMatch[2];
       rest = rest.slice(0, sizeMatch.index);
+      // A size label set apart by a wide gap marks a price clearly: "Silk Scarf   S 900   L 1200".
+      if (sizeMatch[1].length >= 2) strong = true;
     }
   }
   rest = rest.replace(/\s*[/|]\s*$/, WIDE_GAP);

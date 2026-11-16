@@ -1,11 +1,13 @@
-# Menu Importer
+# Menu & Catalog Maker
 
-Turn restaurant menus into a clean CSV: phone photos, designed or scanned
-menus, PDFs, Excel workbooks, CSV, Word and text files, in dozens of languages.
+Build **restaurant menus** and **shop catalogs** from phone photos, designed
+or scanned menus, price lists, PDFs, Excel, CSV, Word and text files, in
+dozens of languages. Shop catalogs export straight to **WhatsApp, Facebook,
+Instagram** (Meta catalog) and **Google Merchant Center**.
 
 **It is free.** Everything runs in your web browser: text recognition, PDF
-reading and spreadsheet reading. Nothing is uploaded and there are no paid
-services or API keys.
+and spreadsheet reading, photo processing and storage. Nothing is uploaded
+and there are no paid services or API keys.
 
 ## Use the web tool
 
@@ -15,6 +17,61 @@ automatically. Once Pages is turned on (see below), open:
 ```
 https://<your-github-username>.github.io/menu-importer/
 ```
+
+The home page lists your menus and catalogs. Select **Create new** and
+choose a **Restaurant menu** or a **Shop catalog**. Each one is saved in your
+browser; **Settings › Download backup** moves it to another device
+(**Restore a backup** on the home page).
+
+## Shop catalogs
+
+1. **Add products** three ways:
+   - **From product photos**: drop photos and each item becomes a product.
+     Photos named `red-dress-1.jpg`, `red-dress-2.jpg` are grouped into one
+     product called "Red dress".
+   - **One product by hand.**
+   - **Import a product list**: Excel or CSV (column names in many languages
+     are recognised), a Meta or Google product feed, or a photo, PDF or pasted
+     text of a price list.
+2. **Edit each product**: up to 10 photos (2–3 recommended, the first is the
+   main one), title, description, price and sale price, availability,
+   condition, stock, category, brand, and **colours and sizes**. Every
+   colour × size combination becomes a variant with its own SKU, price, stock
+   and photo. Under *More details*: material, pattern, gender, age group,
+   barcode (GTIN) and product page link. Each product shows what it still
+   needs before Meta and Google accept it.
+3. **Share and export**:
+   - **Meta catalog (CSV)** for WhatsApp Business, Facebook and Instagram
+     shops. In [Meta Commerce Manager](https://business.facebook.com/commerce)
+     open your catalog, then *Data sources › Data feed › Upload once*. Connect
+     the catalog to WhatsApp Business (*WhatsApp Manager › Catalog*), your
+     Facebook Page and Instagram.
+   - **Google feed (TSV)** for Google Merchant Center (*Products › Add
+     products › Add from file*).
+   - **Photos (ZIP)**: square JPEGs named by SKU. Meta and Google read photos
+     from public links, so put this folder online once (for example a free
+     public GitHub repository with Pages turned on; the tool shows the steps)
+     and enter its address under **Settings › Photo link address**. Photos
+     you added as links are used as they are.
+   - **Excel**, and a **WhatsApp product list** to paste into chats and status.
+
+Products without their own page link to a WhatsApp chat with your number
+(`https://wa.me/…`, with a message naming the product), or to your website.
+
+### Naming conventions
+
+| What | Pattern | Example |
+| --- | --- | --- |
+| SKU prefix | Initials of the shop name (editable in Settings) | `DFH` for Dhaka Fashion House |
+| Product SKU (`item_group_id`) | `<prefix>-<4 digits>`, never reused | `DFH-0001` |
+| Variant SKU (`id`) | `<product SKU>-<COLOUR>-<SIZE>` | `DFH-0001-NAVY-XL` |
+| Photo files | `<product SKU in lowercase>-<n>.jpg` | `dfh-0001-1.jpg`, `dfh-0001-2.jpg` |
+| Feed columns | Meta's and Google's official field names | `id, title, description, availability, condition, price, sale_price, link, image_link, additional_image_link, brand, item_group_id, color, size, material, pattern, gender, age_group, product_type, gtin, quantity_to_sell_on_facebook` |
+| Prices in feeds | amount with 2 decimals, space, ISO currency | `1650.00 BDT` |
+
+A feed exported by the tool can be imported again with the same SKUs.
+
+## Restaurant menus
 
 1. **Add your menu.** Choose files or drop them in: photos, PDF, Excel, CSV,
    Word or text. You can also paste text, or rows copied from a spreadsheet.
@@ -114,7 +171,9 @@ npm run serve
 Then open http://localhost:8080. (Opening `index.html` directly from disk does
 not work, because browsers block the text recognition worker on `file://`.)
 
-Run the parser tests with `npm test`.
+Run the unit tests with `npm test`, and the end-to-end check of the main
+flows (shop and restaurant, exports, backup, phone layout) with
+`node qa/flows.cjs` after `npm run build`.
 
 ### Quality checks
 

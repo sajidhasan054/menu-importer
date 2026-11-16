@@ -24,6 +24,7 @@ test("line prices, portions and currencies", () => {
     ["Fruit Salad $13", "CAD", "Fruit Salad", [["13", "CAD", null]]],
     ["Latte   S 3.5   L 4.5", "USD", "Latte", [["3.50", "USD", "S"], ["4.50", "USD", "L"]]],
     ["Cappuccino   3:50 €", "USD", "Cappuccino", [["3.50", "EUR", null]]],
+    ["Silk Scarf   S 900  L 1200", "BDT", "Silk Scarf", [["900", "BDT", "S"], ["1200", "BDT", "L"]]],
   ];
   for (const [line, currency, name, prices] of cases) {
     const parsed = parseLine(line, currency);

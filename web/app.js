@@ -3,6 +3,9 @@ import {
   looksLikeTable, mergeWordSets, parseAmount, parseMenuText,
   tableToRows, toCSV,
 } from "./parser.js";
+import { SHOP_FIELDS, guessShopColumns, newShop, shopTableRows } from "./catalog.js";
+import * as store from "./store.js";
+import * as shopView from "./shop.js";
 
 const $ = id => document.getElementById(id);
 const STORE_KEY = "menu-to-csv:v1";
@@ -14,12 +17,14 @@ const MAPPING_CHOICES = [
 const CURRENCIES = "BDT USD EUR GBP INR PKR LKR NPR AED SAR QAR KWD OMR BHD EGP TRY JPY CNY KRW THB VND IDR MYR SGD PHP AUD NZD CAD CHF SEK NOK DKK PLN CZK HUF RON RUB UAH ILS BRL MXN ZAR NGN KES".split(" ");
 
 const state = {
+  catalog: null, // the open restaurant menu or shop catalog
   sources: [],   // {id, kind: "image"|"text"|"table", title, ...}
   rows: [],      // {id, src, section, name, name_en, description, portion, price, currency, source, edited}
   onlyIssues: false,
 };
 let nextId = 1;
 const newId = () => nextId++;
+const isShop = () => state.catalog?.type === "shop";
 
 // ------------------------------------------------------------------ settings
 
@@ -48,16 +53,32 @@ function readStore() {
 }
 
 let saveTimer;
+let pendingSave = null;
+/** Save reading settings (this browser) and the open menu. Writes are batched while typing. */
 function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ settings })); } catch { /* blocked: settings last this visit */ }
+  if (!state.catalog || isShop()) return;
+  state.catalog.rows = state.rows.map(({ id, src, ...row }) => row);
+  pendingSave = state.catalog;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({
-        settings,
-        rows: state.rows.map(({ id, src, ...row }) => row),
-      }));
-    } catch { /* storage full or blocked: the page still works */ }
-  }, 300);
+  saveTimer = setTimeout(flushSave, 300);
+}
+
+async function flushSave() {
+  clearTimeout(saveTimer);
+  const catalog = pendingSave;
+  pendingSave = null;
+  if (catalog) await saveCatalog(catalog);
+}
+window.addEventListener("pagehide", flushSave);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushSave(); });
+
+async function saveCatalog(catalog) {
+  try {
+    await store.saveCatalog(catalog);
+  } catch (error) {
+    status(`Could not save: ${error.message}`, true);
+  }
 }
 
 async function setupOptions() {
@@ -119,9 +140,15 @@ function updateLanguageSummary() {
 
 // ------------------------------------------------------------------ status
 
+let statusTimer;
+/** Show a message at the bottom of the screen. Progress messages ("Reading…") stay until replaced. */
 function status(message, isError = false) {
   $("status").textContent = message;
   $("status").classList.toggle("error", isError);
+  clearTimeout(statusTimer);
+  if (message && !message.endsWith("…")) {
+    statusTimer = setTimeout(() => { $("status").textContent = ""; }, isError ? 12000 : 6000);
+  }
 }
 
 // ------------------------------------------------------------------ files
@@ -276,7 +303,7 @@ function addDelimited(title, text) {
 }
 
 function addTableSource(title, table) {
-  const source = { id: newId(), kind: "table", title, table, ...guessColumns(table) };
+  const source = { id: newId(), kind: "table", title, table, ...(isShop() ? guessShopColumns(table) : guessColumns(table)) };
   state.sources.push(source);
   renderSource(source);
   applySource(source);
@@ -826,6 +853,7 @@ function sourceActions(source) {
     if (!confirmReplace(source, "Remove this file and its items?")) return;
     state.sources = state.sources.filter(s => s !== source);
     state.rows = state.rows.filter(r => r.src !== source.id);
+    if (isShop()) shopView.removeSourceProducts(source.id);
     source.view.remove();
     $("sources-section").hidden = !state.sources.length;
     renderGrid();
@@ -863,11 +891,13 @@ function mappingTable(source) {
   for (let col = 0; col < width; col++) {
     const th = document.createElement("th");
     const select = document.createElement("select");
-    for (const [value, label] of MAPPING_CHOICES) select.add(new Option(label, value));
+    for (const [value, label] of isShop() ? SHOP_FIELDS : MAPPING_CHOICES) select.add(new Option(label, value));
     select.value = source.mapping[col] || "ignore";
     select.setAttribute("aria-label", `Column ${col + 1}`);
     select.addEventListener("change", () => {
-      const unique = ["name", "section", "description", "portion", "currency", "name_en"];
+      const unique = isShop()
+        ? SHOP_FIELDS.map(([v]) => v).filter(v => v !== "ignore")
+        : ["name", "section", "description", "portion", "currency", "name_en"];
       if (unique.includes(select.value)) {
         source.mapping = source.mapping.map((m, i) => (m === select.value && i !== col ? "ignore" : m));
       }
@@ -906,6 +936,7 @@ function mappingTable(source) {
 }
 
 function confirmReplace(source, message) {
+  if (isShop()) return true; // the shop keeps products the user edited
   const edited = state.rows.some(r => r.src === source.id && r.edited);
   return !edited || confirm(`${message}\nYou edited some of its items in the table; those edits will be lost.`);
 }
@@ -914,6 +945,15 @@ function confirmReplace(source, message) {
 function applySource(source, userAction = false) {
   if (userAction && !confirmReplace(source, "Update the items from this file?")) return;
   const options = { defaultCurrency: settings.currency, source: source.title };
+  if (isShop()) {
+    let rows, unmatched = [];
+    if (source.kind === "table") rows = shopTableRows(source.table, source);
+    else ({ rows, unmatched } = parseMenuText(source.text || "", options));
+    showUnmatched(source, unmatched);
+    const count = shopView.applyRows(source.id, rows, userAction);
+    status(`${source.title}: ${count} product${count === 1 ? "" : "s"} added. Open each one to add photos and details.`);
+    return;
+  }
   let result;
   if (source.kind === "table") {
     result = tableToRows(source.table, source, options);
@@ -942,6 +982,7 @@ function rowIssue(row) {
 }
 
 function renderGrid() {
+  if (isShop()) return;
   const has = state.rows.length > 0;
   $("items-section").hidden = !has && !state.sources.length;
   $("download-section").hidden = !has;
@@ -1057,13 +1098,10 @@ $("add-row").addEventListener("click", () => {
   focusRow(state.rows.length - 1);
 });
 $("clear").addEventListener("click", () => {
-  if (!confirm("Remove all files and items?")) return;
+  if (!confirm("Remove all items from this menu?")) return;
   state.rows = [];
-  state.sources = [];
-  $("sources").replaceChildren();
-  $("sources-section").hidden = true;
   renderGrid();
-  status("");
+  status("All items removed.");
 });
 
 // ------------------------------------------------------------------ paste
@@ -1130,10 +1168,258 @@ $("copy-prompt").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------ start
 
-await setupOptions();
-const stored = readStore();
-if (stored.rows?.length) {
-  state.rows = stored.rows.map(row => ({ ...row, id: newId(), src: null }));
-  renderGrid();
-  status(`Restored ${stored.rows.length} rows from your last visit. Select Start over to clear them.`);
+// ------------------------------------------------------------------ home, catalogs and routing
+
+const TYPE_NAMES = { restaurant: "Restaurant menu", shop: "Shop catalog" };
+
+function relativeTime(time) {
+  const minutes = Math.round((Date.now() - time) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return new Date(time).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+
+async function renderHome() {
+  const catalogs = await store.listCatalogs();
+  const list = $("catalog-list");
+  list.replaceChildren(...catalogs.map(catalog => {
+    const link = document.createElement("a");
+    link.className = `catalog-card ${catalog.type}`;
+    link.href = `#/c/${catalog.id}`;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = TYPE_NAMES[catalog.type];
+    const name = document.createElement("strong");
+    name.textContent = catalog.name;
+    const meta = document.createElement("span");
+    meta.className = "help";
+    const count = catalog.type === "shop"
+      ? `${(catalog.products || []).length} product${(catalog.products || []).length === 1 ? "" : "s"}`
+      : `${(catalog.rows || []).length} menu row${(catalog.rows || []).length === 1 ? "" : "s"}`;
+    meta.textContent = `${count} · ${catalog.currency} · edited ${relativeTime(catalog.updated || Date.now())}`;
+    link.append(badge, name, meta);
+    return link;
+  }));
+  $("catalog-empty").hidden = catalogs.length > 0;
+  $("storage-note").textContent = (await store.isPersistent())
+    ? "Saved in this browser on this device. Use Settings › Download backup to move a catalog to another device."
+    : "This browser is blocking storage (private window?), so your work lasts only until you close this tab.";
+}
+
+function showView(name) {
+  $("home-view").hidden = name !== "home";
+  $("workspace").hidden = name !== "workspace";
+  document.body.dataset.mode = name === "workspace" ? state.catalog.type : "home";
+  window.scrollTo(0, 0);
+}
+
+function resetImports() {
+  state.sources = [];
+  state.rows = [];
+  document.querySelectorAll("#add-section details").forEach(d => { d.open = false; });
+  $("paste").value = "";
+  $("sources").replaceChildren();
+  $("sources-section").hidden = true;
+}
+
+function refreshHeader() {
+  const catalog = state.catalog;
+  $("ws-type").textContent = TYPE_NAMES[catalog.type];
+  $("ws-type").className = `badge ${catalog.type}`;
+  $("ws-name").textContent = catalog.name;
+  $("ws-meta").textContent = isShop()
+    ? [`SKU prefix ${catalog.code}`, catalog.currency, catalog.whatsapp && `WhatsApp ${catalog.whatsapp}`, catalog.website].filter(Boolean).join(" · ")
+    : `${catalog.currency} · Read menus from photos, PDFs and spreadsheets`;
+  document.title = `${catalog.name} · Menu & Catalog Maker`;
+  const crumb = $("crumb");
+  crumb.replaceChildren();
+  const home = document.createElement("a");
+  home.href = "#/";
+  home.textContent = "All catalogs";
+  const here = document.createElement("span");
+  here.textContent = catalog.name;
+  here.setAttribute("aria-current", "page");
+  crumb.append(home, " › ", here);
+}
+
+async function openCatalog(id) {
+  const catalog = await store.getCatalog(id);
+  if (!catalog) { location.hash = "#/"; return; }
+  state.catalog = catalog;
+  resetImports();
+  settings.currency = catalog.currency;
+  $("currency").value = catalog.currency;
+  refreshHeader();
+  const shop = isShop();
+  $("add-title").querySelector(".title-text").textContent = shop ? "Import a product list" : "Add your menu";
+  $("add-title").querySelector(".step").hidden = shop;
+  $("drop-help").textContent = shop
+    ? "Excel or CSV product lists (including Meta and Google feeds), or a photo or PDF of a price list. Several files are fine."
+    : "Photos (JPG, PNG, WebP), PDF, Excel, CSV, Word or text. Several files and pages are fine.";
+  $("sources-help").innerHTML = shop
+    ? "Check what each column holds, or fix the recognized text, then select <b>Update items</b>. New products appear under <b>Products</b>."
+    : "Recognized text is editable. Fix mistakes, then select <b>Update items</b>. A line starting with <code>#</code> becomes a section heading. Put two spaces before a price if it is not picked up.";
+  $("sources-title").querySelector(".step").hidden = shop;
+  if (shop) {
+    shopView.openShop(catalog);
+  } else {
+    state.rows = (catalog.rows || []).map(row => ({ ...row, id: newId(), src: null }));
+    $("add-section").hidden = false;
+    renderGrid();
+  }
+  showView("workspace");
+}
+
+async function route() {
+  await flushSave();
+  const match = location.hash.match(/^#\/c\/([\w-]+)/);
+  if (match) {
+    await openCatalog(match[1]);
+  } else {
+    state.catalog = null;
+    resetImports();
+    document.title = "Menu & Catalog Maker";
+    $("crumb").replaceChildren();
+    await renderHome();
+    showView("home");
+  }
+}
+
+// Dialogs ------------------------------------------------------------------
+
+for (const dialog of document.querySelectorAll("dialog")) {
+  dialog.querySelectorAll("[data-close]").forEach(button => button.addEventListener("click", () => dialog.close()));
+  // Close when the backdrop is clicked.
+  dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
+}
+
+function syncShopFields(form) {
+  const shop = form.elements.type ? form.elements.type.value === "shop" : isShop();
+  form.querySelectorAll(".shop-fields").forEach(el => { el.hidden = !shop; });
+}
+
+$("create-button").addEventListener("click", () => {
+  const form = $("create-form");
+  form.reset();
+  form.elements.currency.value = settings.currency;
+  syncShopFields(form);
+  $("create-dialog").showModal();
+});
+$("create-form").addEventListener("change", () => syncShopFields($("create-form")));
+$("create-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  data.currency = data.currency.trim().toUpperCase();
+  if (!form.reportValidity()) return;
+  const id = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const catalog = data.type === "shop"
+    ? { id, ...newShop({ name: data.name, currency: data.currency, whatsapp: data.whatsapp.trim(), website: data.website.trim() }) }
+    : { id, type: "restaurant", name: data.name.trim(), currency: data.currency, rows: [] };
+  await saveCatalog(catalog);
+  $("create-dialog").close();
+  location.hash = `#/c/${id}`;
+});
+
+function openSettings() {
+  const form = $("settings-form");
+  const catalog = state.catalog;
+  for (const name of ["name", "currency", "code", "brand", "whatsapp", "website", "imageBase"]) {
+    if (form.elements[name]) form.elements[name].value = catalog[name] || "";
+  }
+  form.elements.brand.placeholder = catalog.name;
+  syncShopFields(form);
+  $("settings-dialog").showModal();
+}
+
+$("ws-settings").addEventListener("click", openSettings);
+$("settings-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.target;
+  if (!form.reportValidity()) return;
+  const catalog = state.catalog;
+  const data = Object.fromEntries(new FormData(form));
+  catalog.name = data.name.trim();
+  catalog.currency = data.currency.trim().toUpperCase();
+  if (isShop()) {
+    const code = data.code.trim().toUpperCase();
+    if (code && code !== catalog.code && catalog.products.length
+        && confirm(`Change the SKU prefix of all ${catalog.products.length} products from ${catalog.code} to ${code}?\nChoose Cancel to use ${code} for new products only.`)) {
+      for (const p of catalog.products) {
+        const old = p.sku;
+        if (!old.startsWith(catalog.code + "-")) continue;
+        p.sku = code + old.slice(catalog.code.length);
+        for (const v of p.variants) if (v.sku.startsWith(old)) v.sku = p.sku + v.sku.slice(old.length);
+      }
+    }
+    if (code) catalog.code = code;
+    catalog.brand = data.brand.trim();
+    catalog.whatsapp = data.whatsapp.trim();
+    catalog.website = data.website.trim();
+    catalog.imageBase = data.imageBase.trim();
+  }
+  await saveCatalog(catalog);
+  $("settings-dialog").close();
+  refreshHeader();
+  if (isShop()) shopView.renderProducts();
+  settings.currency = catalog.currency;
+  $("currency").value = catalog.currency;
+  status("Settings saved.");
+});
+
+$("delete-catalog").addEventListener("click", async () => {
+  const catalog = state.catalog;
+  const what = isShop() ? `${(catalog.products || []).length} products and their photos` : `${(catalog.rows || []).length} menu rows`;
+  if (!confirm(`Delete “${catalog.name}” with ${what}? This can't be undone. Download a backup first if you may need it.`)) return;
+  await store.deleteCatalog(catalog);
+  $("settings-dialog").close();
+  status(`Deleted ${catalog.name}.`);
+  location.hash = "#/";
+});
+
+$("download-backup").addEventListener("click", async () => {
+  const catalog = structuredClone(state.catalog);
+  if (!isShop()) catalog.rows = state.rows.map(({ id, src, ...row }) => row);
+  status("Preparing backup…");
+  const backup = { format: "menu-catalog-maker", version: 1, saved: new Date().toISOString(), catalog,
+    photos: isShop() ? await shopView.backupPhotos(catalog) : {} };
+  const name = (catalog.code || catalog.name || "catalog").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  download(new Blob([JSON.stringify(backup)], { type: "application/json" }), `${name}-backup-${new Date().toISOString().slice(0, 10)}.json`);
+  status("Backup downloaded. Restore it from the home page on any device.");
+});
+
+$("restore-file").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    const backup = JSON.parse(await file.text());
+    if (backup.format !== "menu-catalog-maker" || !backup.catalog?.type) throw new Error("This is not a backup from this tool.");
+    const catalog = backup.catalog;
+    catalog.id = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const existing = await store.listCatalogs();
+    if (existing.some(c => c.name === catalog.name)) catalog.name = `${catalog.name} (restored)`;
+    if (catalog.type === "shop") await shopView.restorePhotos(catalog, backup.photos);
+    await saveCatalog(catalog);
+    status(`Restored ${catalog.name}.`);
+    location.hash = `#/c/${catalog.id}`;
+  } catch (error) {
+    status(`Could not restore: ${error.message}`, true);
+  }
+});
+
+/** Older versions kept one menu in localStorage; turn it into a saved restaurant menu once. */
+async function migrateOldMenu() {
+  const old = readStore();
+  if (!old.rows?.length) return;
+  await saveCatalog({ id: `c${Date.now().toString(36)}`, type: "restaurant", name: "My menu", currency: settings.currency, rows: old.rows });
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ settings })); } catch { /* ignore */ }
+}
+
+shopView.initShop({ status, download, save: saveCatalog, openSettings, refreshHeader: () => state.catalog && refreshHeader() });
+await setupOptions();
+await migrateOldMenu();
+window.addEventListener("hashchange", route);
+await route();
