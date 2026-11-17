@@ -127,6 +127,11 @@ async function photograph(browser, test) {
     const errors = [];
     page.on("pageerror", e => errors.push(e.message));
     await page.goto(url);
+    await page.click("#create-button");
+    await page.fill('#create-form input[name="name"]', test.id);
+    await page.fill('#create-form input[name="currency"]', "USD");
+    await page.click('#create-form button[type="submit"]');
+    await page.waitForSelector("#add-section:not([hidden])");
     const started = Date.now();
     await page.setInputFiles("#files", image);
     await page.waitForFunction(() => /done|error/i.test(document.getElementById("status").textContent)
