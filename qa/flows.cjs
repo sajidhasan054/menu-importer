@@ -48,6 +48,8 @@ async function makePhotos(page, dir) {
   const url = `http://localhost:${server.address().port}/`;
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+  // Record WhatsApp links instead of opening them.
+  await context.addInitScript(() => { window.openedLinks = []; window.open = url => { window.openedLinks.push(url); return null; }; });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
@@ -157,7 +159,53 @@ async function makePhotos(page, dir) {
   await page.emulateMedia({ colorScheme: "light" });
   step("shop settings");
 
+  // ---- orders: delivery anywhere in Bangladesh through a courier
+  await page.click('[data-tab-button="orders"]');
+  await page.waitForSelector("#orders-empty:not([hidden])");
+  await page.click("#new-order");
+  await page.waitForSelector("#order-dialog[open]");
+  await page.fill('#order-form input[name="name"]', "Rahim Uddin");
+  await page.fill('#order-form input[name="phone"]', "01711-000000");
+  await page.selectOption('#order-form select[name="district"]', "Chattogram");
+  await page.fill('#order-form input[name="area"]', "Agrabad");
+  await page.fill('#order-form textarea[name="address"]', "House 5, Road 2");
+  assert.equal(await page.inputValue('#order-form input[name="deliveryCharge"]'), "130");
+  await page.selectOption("#pick-product", { label: await page.$$eval("#pick-product option", os => os.find(o => o.text.startsWith("Linen Shirt")).text) });
+  await page.selectOption("#pick-variant", "DFH-0001-NAVY-M");
+  await page.fill("#pick-qty", "2");
+  await page.click("#pick-add");
+  assert.match(await page.textContent("#order-totals"), /Courier collects৳3,430/);
+  assert.match(await page.textContent("#order-issues"), /Linen Shirt \(Navy \/ M\) is out of stock/); // its stock was set to 0 earlier
+  await page.screenshot({ path: path.join(OUT, "9-order-editor.png") });
+  await page.click('#order-form button[type="submit"]');
+  await page.waitForFunction(() => !document.getElementById("order-dialog").open);
+  assert.match(await page.textContent(".order-card"), /DFH-ORD-1001/);
+
+  await page.click(".order-card .actions button:first-child"); // Confirm
+  await page.waitForFunction(() => document.querySelector(".order-card .pill").textContent === "Confirmed");
+  const confirmLink = await page.evaluate(() => window.openedLinks.at(-1));
+  assert.match(decodeURIComponent(confirmLink), /^https:\/\/wa\.me\/8801711000000\?text=প্রিয় Rahim Uddin, আপনার অর্ডার DFH-ORD-1001 কনফার্ম হয়েছে/);
+  await page.click('[data-tab-button="orders"]');
+  await page.click(".order-card .actions button:first-child"); // Mark packed
+  await page.waitForFunction(() => document.querySelector(".order-card .pill").textContent === "Packed");
+  const courier = fs.readFileSync(await download("#courier-sheet", "courier.xlsx"));
+  assert.ok(courier.length > 1000);
+  await page.click(".order-card .actions button:first-child"); // Hand to courier
+  await page.waitForSelector("#ship-dialog[open]");
+  await page.selectOption('#ship-form select[name="courier"]', "Steadfast");
+  await page.fill('#ship-form input[name="trackingId"]', "SF123456");
+  await page.click('#ship-form button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector(".order-card .pill").textContent === "With courier");
+  assert.match(decodeURIComponent(await page.evaluate(() => window.openedLinks.at(-1))), /Steadfast-এর মাধ্যমে পাঠানো হয়েছে[\s\S]*SF123456/);
+  assert.match(await page.textContent("#order-stats"), /৳3,430\s*cash to collect/);
+  await shot("10-orders");
+  await page.click(".order-card .actions button:first-child"); // Mark delivered
+  await page.click('.filter-chip:has-text("All")');
+  await page.waitForFunction(() => document.querySelector(".order-card .pill").textContent === "Delivered");
+  step("orders: confirm, pack, courier sheet, hand to courier, deliver, WhatsApp messages");
+
   // ---- exports
+  await page.click('[data-tab-button="share"]');
   const meta = fs.readFileSync(await download("#export-meta", "meta.csv"), "utf8").replace(/^﻿/, "");
   const lines = meta.trim().split("\r\n");
   assert.ok(lines[0].startsWith("id,title,description,availability,condition,price"));

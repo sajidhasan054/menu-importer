@@ -6,6 +6,8 @@ import {
 import { SHOP_FIELDS, guessShopColumns, newShop, shopTableRows } from "./catalog.js";
 import * as store from "./store.js";
 import * as shopView from "./shop.js";
+import * as ordersView from "./orders-ui.js";
+import { COURIERS, defaultDelivery } from "./orders.js";
 
 const $ = id => document.getElementById(id);
 const STORE_KEY = "menu-to-csv:v1";
@@ -1264,6 +1266,8 @@ async function openCatalog(id) {
   $("sources-title").querySelector(".step").hidden = shop;
   if (shop) {
     shopView.openShop(catalog);
+    ordersView.openOrders(catalog);
+    showTab(readTab(catalog.id));
   } else {
     state.rows = (catalog.rows || []).map(row => ({ ...row, id: newId(), src: null }));
     $("add-section").hidden = false;
@@ -1330,6 +1334,11 @@ function openSettings() {
     if (form.elements[name]) form.elements[name].value = catalog[name] || "";
   }
   form.elements.brand.placeholder = catalog.name;
+  const delivery = { ...defaultDelivery(), ...(catalog.delivery || {}) };
+  form.elements.insideDhaka.value = delivery.insideDhaka;
+  form.elements.outsideDhaka.value = delivery.outsideDhaka;
+  form.elements.courier.value = catalog.courier || "";
+  form.elements.language.value = catalog.language || "bn";
   syncShopFields(form);
   $("settings-dialog").showModal();
 }
@@ -1359,11 +1368,15 @@ $("settings-form").addEventListener("submit", async event => {
     catalog.whatsapp = data.whatsapp.trim();
     catalog.website = data.website.trim();
     catalog.imageBase = data.imageBase.trim();
+    const number = (value, fallback) => (String(value).trim() === "" ? fallback : Math.max(0, Number(String(value).replace(/[^\d.]/g, "")) || 0));
+    catalog.delivery = { insideDhaka: number(data.insideDhaka, 70), outsideDhaka: number(data.outsideDhaka, 130) };
+    catalog.courier = data.courier;
+    catalog.language = data.language;
   }
   await saveCatalog(catalog);
   $("settings-dialog").close();
   refreshHeader();
-  if (isShop()) shopView.renderProducts();
+  if (isShop()) { shopView.renderProducts(); ordersView.renderOrders(); }
   settings.currency = catalog.currency;
   $("currency").value = catalog.currency;
   status("Settings saved.");
@@ -1418,7 +1431,34 @@ async function migrateOldMenu() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify({ settings })); } catch { /* ignore */ }
 }
 
+// Shop tabs ------------------------------------------------------------------
+
+const TAB_KEY = "menu-catalog-maker:tabs";
+function readTab(id) {
+  try { return JSON.parse(localStorage.getItem(TAB_KEY) || "{}")[id] || "products"; } catch { return "products"; }
+}
+function showTab(tab) {
+  document.body.dataset.tab = tab;
+  document.querySelectorAll("[data-tab-button]").forEach(button => {
+    if (button.dataset.tabButton === tab) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  try {
+    const tabs = JSON.parse(localStorage.getItem(TAB_KEY) || "{}");
+    if (state.catalog) tabs[state.catalog.id] = tab;
+    localStorage.setItem(TAB_KEY, JSON.stringify(tabs));
+  } catch { /* remembering the tab is optional */ }
+}
+document.querySelectorAll("[data-tab-button]").forEach(button => button.addEventListener("click", () => {
+  showTab(button.dataset.tabButton);
+  window.scrollTo({ top: 0 });
+}));
+
+const courierSelect = $("settings-form").elements.courier;
+courierSelect.replaceChildren(new Option("Not set", ""), ...COURIERS.map(c => new Option(c, c)));
+
 shopView.initShop({ status, download, save: saveCatalog, openSettings, refreshHeader: () => state.catalog && refreshHeader() });
+ordersView.initOrders({ status, download, save: saveCatalog, products: () => state.catalog?.products || [], productsChanged: () => shopView.renderProducts() });
 await setupOptions();
 await migrateOldMenu();
 window.addEventListener("hashchange", route);

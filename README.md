@@ -58,6 +58,31 @@ browser; **Settings › Download backup** moves it to another device
 Products without their own page link to a WhatsApp chat with your number
 (`https://wa.me/…`, with a message naming the product), or to your website.
 
+### Orders and delivery
+
+The **Orders** tab is for shops that sell through WhatsApp, Messenger or
+calls and deliver anywhere in Bangladesh through a courier.
+
+- **New order**: customer name, mobile, district (all 64), area and address;
+  products and options from the catalog; delivery charge (inside or outside
+  Dhaka, set in **Settings**, editable per order); discount; payment (cash on
+  delivery, bKash, Nagad, Rocket, bank, card) with any advance and its
+  transaction ID. It shows what the courier must collect, and warns when an
+  option is out of stock.
+- **Status**: New → Confirmed → Packed → With courier (courier and tracking
+  number) → Delivered, or Cancelled / Returned. Confirming takes the stock;
+  cancelling or a return puts it back.
+- **Customer updates**: at each step, open a WhatsApp chat with the customer
+  with the message already written, in Bangla or English (set in
+  **Settings**). It's sent from the owner's own WhatsApp, so it costs nothing.
+- **Courier sheet**: packed orders as Excel (invoice, name, phone, address,
+  district, area, cash to collect, items) for bulk upload in the courier's
+  merchant panel. **Invoice** prints an invoice and packing slip.
+- The summary shows orders to confirm, to ship, with the courier, and the cash
+  the couriers still have to hand over.
+
+Order numbers follow the shop prefix: `DFH-ORD-1001`.
+
 ### Naming conventions
 
 | What | Pattern | Example |
@@ -66,6 +91,7 @@ Products without their own page link to a WhatsApp chat with your number
 | Product SKU (`item_group_id`) | `<prefix>-<4 digits>`, never reused | `DFH-0001` |
 | Variant SKU (`id`) | `<product SKU>-<COLOUR>-<SIZE>` | `DFH-0001-NAVY-XL` |
 | Photo files | `<product SKU in lowercase>-<n>.jpg` | `dfh-0001-1.jpg`, `dfh-0001-2.jpg` |
+| Order number | `<prefix>-ORD-<number from 1001>` | `DFH-ORD-1001` |
 | Feed columns | Meta's and Google's official field names | `id, title, description, availability, condition, price, sale_price, link, image_link, additional_image_link, brand, item_group_id, color, size, material, pattern, gender, age_group, product_type, gtin, quantity_to_sell_on_facebook` |
 | Prices in feeds | amount with 2 decimals, space, ISO currency | `1650.00 BDT` |
 

@@ -52,9 +52,15 @@
       </div>
     </div>
 
+    <nav class="tabs shop-only" aria-label="Shop sections">
+      <button type="button" class="tab" data-tab-button="products" aria-current="page">Products <span class="count" id="tab-products-count"></span></button>
+      <button type="button" class="tab" data-tab-button="orders">Orders <span class="count" id="tab-orders-count"></span></button>
+      <button type="button" class="tab" data-tab-button="share">Share &amp; export</button>
+    </nav>
+
     <!-- Shop: ways to add products -->
-    <section id="shop-add" class="shop-only" aria-labelledby="shop-add-title">
-      <h2 id="shop-add-title"><span class="step">1</span>Add products</h2>
+    <section id="shop-add" class="shop-only" data-tab="products" aria-labelledby="shop-add-title">
+      <h2 id="shop-add-title">Add products</h2>
       <div class="add-grid">
         <label class="add-card drop" id="photo-drop">
           <input type="file" id="product-photos" multiple accept="image/*,.heic,.heif">
@@ -76,7 +82,7 @@
     </section>
 
     <!-- Shared importer (restaurant: step 1; shop: product list import) -->
-    <section id="add-section" aria-labelledby="add-title">
+    <section id="add-section" data-tab="products" aria-labelledby="add-title">
       <h2 id="add-title"><span class="step">1</span><span class="title-text">Add your menu</span></h2>
       <label class="drop" id="drop">
         <input type="file" id="files" multiple
@@ -138,7 +144,7 @@
       </details>
     </section>
 
-    <section id="sources-section" aria-labelledby="sources-title" hidden>
+    <section id="sources-section" data-tab="products" aria-labelledby="sources-title" hidden>
       <h2 id="sources-title"><span class="step">2</span>Check what was read</h2>
       <p class="help" id="sources-help">Recognized text is editable. Fix mistakes, then select <b>Update items</b>. A line starting with <code>#</code> becomes a section heading. Put two spaces before a price if it is not picked up.</p>
       <div id="sources"></div>
@@ -174,9 +180,9 @@
     </section>
 
     <!-- Shop: products and sharing -->
-    <section id="products-section" class="shop-only" aria-labelledby="products-title">
+    <section id="products-section" class="shop-only" data-tab="products" aria-labelledby="products-title">
       <div class="section-head">
-        <h2 id="products-title"><span class="step">2</span>Products</h2>
+        <h2 id="products-title">Products</h2>
         <p id="products-summary" class="help"></p>
       </div>
       <div class="toolbar">
@@ -190,8 +196,29 @@
       <p id="products-empty" class="empty">No products yet. Add product photos, add one by hand, or import a list.</p>
     </section>
 
-    <section id="share-section" class="shop-only" aria-labelledby="share-title">
-      <h2 id="share-title"><span class="step">3</span>Share and export</h2>
+    <section id="orders-section" class="shop-only" data-tab="orders" aria-labelledby="orders-title">
+      <div class="section-head">
+        <h2 id="orders-title">Orders</h2>
+        <button type="button" id="new-order">New order</button>
+      </div>
+      <p class="help">Record orders from WhatsApp, Messenger or calls. Delivery anywhere in Bangladesh through your courier. Each step can send the customer a WhatsApp update from your phone.</p>
+      <div id="order-stats" class="stats"></div>
+      <div class="toolbar">
+        <label class="search"><span class="visually-hidden">Search orders</span>
+          <input type="search" id="order-search" placeholder="Search by order number, name, phone, district…"></label>
+      </div>
+      <div id="status-filter" class="status-filter" role="group" aria-label="Filter by status"></div>
+      <div id="order-list" class="order-list"></div>
+      <p id="orders-empty" class="empty">No orders yet. Select <b>New order</b> when a customer orders.</p>
+      <div class="actions">
+        <button type="button" id="courier-sheet" class="secondary">Courier sheet for packed orders (Excel)</button>
+        <button type="button" id="export-orders" class="secondary">All orders (Excel)</button>
+      </div>
+      <p class="help">The courier sheet lists packed orders with name, phone, address, district and the cash to collect, for bulk upload in your courier's merchant panel (Steadfast, Pathao, RedX, Paperfly…). If the panel's template uses other column names, copy the columns across.</p>
+    </section>
+
+    <section id="share-section" class="shop-only" data-tab="share" aria-labelledby="share-title">
+      <h2 id="share-title">Share and export</h2>
       <div id="share-checklist" class="checklist"></div>
 
       <div class="export-grid">
@@ -280,6 +307,15 @@
       <label>Website <input name="website" type="url" placeholder="https://"></label>
       <label>Photo link address <input name="imageBase" type="url" placeholder="https://yourname.github.io/shop-photos/">
         <span class="help">Where the downloaded photo folder is online. Photo links in the feeds are this address plus each file name.</span></label>
+      <fieldset class="options-box">
+        <legend>Delivery and orders</legend>
+        <div class="three">
+          <label>Delivery inside Dhaka <input name="insideDhaka" inputmode="numeric" placeholder="70"></label>
+          <label>Delivery outside Dhaka <input name="outsideDhaka" inputmode="numeric" placeholder="130"></label>
+          <label>Usual courier <select name="courier"></select></label>
+        </div>
+        <label>Messages to customers in <select name="language"><option value="bn">বাংলা (Bangla)</option><option value="en">English</option></select></label>
+      </fieldset>
     </div>
     <div class="dialog-actions spread">
       <div class="actions">
@@ -394,6 +430,90 @@
   </form>
 </dialog>
 
+<dialog id="order-dialog" class="wide" aria-labelledby="order-title">
+  <form method="dialog" id="order-form" novalidate>
+    <div class="dialog-head">
+      <h2 id="order-title">Order</h2>
+      <span id="order-number" class="sku"></span>
+      <button type="button" class="icon-button" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="order-layout">
+      <fieldset class="order-customer">
+        <legend>Customer</legend>
+        <div class="two">
+          <label>Name <input name="name" autocomplete="off" placeholder="Customer name"></label>
+          <label>Mobile <input name="phone" inputmode="tel" autocomplete="off" placeholder="01XXXXXXXXX"></label>
+        </div>
+        <div class="two">
+          <label>District <select name="district"></select></label>
+          <label>Area / thana <input name="area" placeholder="e.g. Agrabad"></label>
+        </div>
+        <label>Address <textarea name="address" rows="2" placeholder="House, road, landmark"></textarea></label>
+        <label><span>Note <span class="optional">for you and the courier</span></span><input name="note" placeholder="e.g. Call before delivery"></label>
+      </fieldset>
+      <fieldset class="order-items">
+        <legend>Products</legend>
+        <div class="item-picker">
+          <label class="grow"><span class="visually-hidden">Product</span><select id="pick-product"></select></label>
+          <label><span class="visually-hidden">Option</span><select id="pick-variant"></select></label>
+          <label class="qty"><span class="visually-hidden">Quantity</span><input id="pick-qty" type="number" min="1" value="1"></label>
+          <button type="button" id="pick-add" class="secondary">Add</button>
+        </div>
+        <div class="table-wrap"><table class="items-table">
+          <thead><tr><th>Product</th><th>Qty</th><th>Price</th><th>Amount</th><th></th></tr></thead>
+          <tbody id="order-items"></tbody>
+        </table></div>
+        <div class="three">
+          <label>Delivery charge <input name="deliveryCharge" inputmode="numeric"></label>
+          <label>Discount <input name="discount" inputmode="numeric" placeholder="0"></label>
+          <label>Payment <select name="method"></select></label>
+        </div>
+        <div class="two">
+          <label>Paid in advance <input name="advance" inputmode="numeric" placeholder="0"></label>
+          <label><span>Transaction ID <span class="optional">bKash/Nagad</span></span><input name="transactionId"></label>
+        </div>
+        <dl id="order-totals" class="totals"></dl>
+      </fieldset>
+      <fieldset class="order-status">
+        <legend>Status</legend>
+        <div class="two">
+          <label>Status <select name="status"></select></label>
+          <label>Courier <select name="courier"></select></label>
+          <label>Tracking number <input name="trackingId" autocomplete="off"></label>
+          <label><span>Tracking link <span class="optional">optional</span></span><input name="trackingUrl" type="url" placeholder="https://"></label>
+        </div>
+        <ol id="order-history" class="history"></ol>
+      </fieldset>
+    </div>
+    <ul id="order-issues" class="issues"></ul>
+    <div class="dialog-actions spread">
+      <div class="actions">
+        <button type="button" id="order-delete" class="danger">Delete</button>
+        <button type="button" id="order-print" class="secondary">Invoice</button>
+      </div>
+      <div class="actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button type="submit" value="save">Save order</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="ship-dialog" aria-labelledby="ship-title">
+  <form method="dialog" id="ship-form">
+    <h2 id="ship-title">Hand to courier</h2>
+    <p class="help" id="ship-summary"></p>
+    <label>Courier <select name="courier"></select></label>
+    <label><span>Tracking number <span class="optional">or consignment ID</span></span><input name="trackingId" autocomplete="off"></label>
+    <label><span>Tracking link <span class="optional">optional</span></span><input name="trackingUrl" type="url" placeholder="https://"></label>
+    <label class="toggle"><input type="checkbox" name="notify" checked> Open WhatsApp to tell the customer</label>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="submit" value="ship">Mark as with courier</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="photo-help-dialog" aria-labelledby="photo-help-title">
   <form method="dialog">
     <h2 id="photo-help-title">Put your product photos online for free</h2>
@@ -411,5 +531,6 @@
 </dialog>
 
 <footer>Free and open source. Text recognition by <a href="https://github.com/naptha/tesseract.js">Tesseract.js</a>, PDFs by <a href="https://mozilla.github.io/pdf.js/">PDF.js</a>, spreadsheets by <a href="https://sheetjs.com/">SheetJS</a>.</footer>
+<iframe id="print-frame" title="Print" hidden></iframe>
 </body>
 </html>

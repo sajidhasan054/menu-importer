@@ -204,7 +204,8 @@ export function renderProducts() {
     ? `${products.length} product${products.length === 1 ? "" : "s"} · ${ready} ready to share`
     : "";
   $("products-empty").hidden = products.length > 0;
-  $("share-section").hidden = products.length === 0;
+  $("tab-products-count").textContent = products.length || "";
+  document.querySelector("#share-section .export-grid").hidden = products.length === 0;
 
   const categories = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
   const select = $("category-filter");

@@ -86,6 +86,8 @@ export function newShop({ name = "", currency = "USD", whatsapp = "", website = 
   return {
     type: "shop", name: name.trim(), code: shopCode(name), currency, whatsapp, website, brand: brand.trim(),
     imageBase: "", lastNumber: 0, products: [],
+    orders: [], lastOrder: 1000, delivery: { insideDhaka: 70, outsideDhaka: 130 }, courier: "",
+    language: currency === "BDT" ? "bn" : "en",
   };
 }
 
